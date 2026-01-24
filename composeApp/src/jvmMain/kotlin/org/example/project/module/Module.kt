@@ -15,9 +15,9 @@ abstract class Module(val name: String) {
                                           H::class, Settings::class).also { conversions.add(it) }
   
 //  var list = mutableListOf<>()
-  
-  
-  
+
+
+
 }
 
 object Mo : Module("Mo") {
@@ -32,6 +32,7 @@ object Mo : Module("Mo") {
 fun main() {
   Mo.a1
 }
+
 
 abstract class IConversion<T : Any, H : Any>(val input: KClass<T>, val output: KClass<H>) {
   val inputJava by lazy { input.java }
