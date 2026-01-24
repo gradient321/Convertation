@@ -52,10 +52,16 @@ class Bundle<T : Any, H : Any>(
 }
 
 fun main() {
-  println(createBundle(
+  val bundle = createBundle(
     Mo.a1,
     Mo.toDouble,
     Mo.a2.with(ConversionExample(3.0, 2.0)),
     final = Mo.a1
-  ).unwrap()(4.3))
+  ).unwrap()
+  
+  println(bundle(4.3))
+  println(bundle(1.0f))
 }
+
+
+

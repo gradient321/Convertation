@@ -7,6 +7,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.text.isTypedEvent
 import androidx.compose.runtime.*
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -70,6 +71,7 @@ fun main() = application {
         onCloseRequest = ::exitApplication,
         title = "Кубик с рамкой при выборе",
         onKeyEvent = { event ->
+            Key.MetaRight
             if (event.key == Key.CtrlLeft && event.type == KeyEventType.KeyDown) {
                 println("Глобальный CtrlLeft нажат")
                 true
@@ -78,7 +80,14 @@ fun main() = application {
             }
         }
     ) {
-        Box(modifier = Modifier.fillMaxSize().background(BackgroundColor)) {
+        Box(modifier = Modifier.fillMaxSize().background(BackgroundColor).pointerInput(Unit) {
+            detectTapGestures(
+                onLongPress = {
+                    println("Нажата правая кнопка мыши (ПКМ)")
+                    // Действие при клике
+                }
+            )
+        }) {
             DragWithSelectionBorder()
         }
     }
@@ -88,21 +97,25 @@ fun main() = application {
 
 
 // ПКМ в инете так прописано но тут не работает все импорты и т п есть все сверил но нихуя не работает
-//fun RightClickExample() {
-//    Box(
-//        modifier = Modifier
-//            .size(200.dp)
-//            .background(Color.LightGray)
-//            .pointerInput(Unit) {
-//                detectTapGestures(
-//                    onSecondaryTap = {
-//                        println("Нажата правая кнопка мыши (ПКМ)")
-//                        // Действие при клике
-//                    }
-//                )
-//            }
-//    )
-//}
+@Composable
+fun RightClickExample() {
+    Box(
+        modifier = Modifier
+            .size(200.dp)
+            .background(Color.LightGray)
+            .pointerInput(Unit) {
+//                onRightClickDown {
+//
+//                }
+                detectTapGestures(
+                    onTap = {
+                        println("Нажата правая кнопка мыши (ПКМ)")
+                        // Действие при клике
+                    }
+                )
+            }
+    )
+}
 
 
 
