@@ -2,12 +2,15 @@ package org.example.project
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -25,12 +28,22 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
+import java.util.UUID
 
 val BackgroundColor = Color(0xFF1E1E1E)
-val CubeColor1 = Color(0xFF4A148C)
-val CubeColor2 = Color(0xFF0288D1)
+val DefaultBlockColors = listOf(
+    Color(0xFF4A148C),  // Фиолетовый
+    Color(0xFF0288D1),  // Синий
+    Color(0xFF2E7D32),  // Зелёный
+    Color(0xFFC62828),  // Красный
+    Color(0xFF5D4037),  // Коричневый
+    Color(0xFF6A1B9A),  // Тёмно-фиолетовый
+    Color(0xFFFFA000),  // Оранжевый
+    Color(0xFF37474F)   // Серый
+)
 val SelectionBorderColor = Color.White
 const val BorderWidth = 2f
 val MarqueeColor = Color(0x80FFFFFF) // Полупрозрачный белый
@@ -38,15 +51,19 @@ val MarqueeColor = Color(0x80FFFFFF) // Полупрозрачный белый
 // Глобальное состояние Ctrl (доступно везде)
 var isCtrlLeftPressed by mutableStateOf(false)
 
-sealed interface SelectedCube {
-    object Cube1 : SelectedCube
-    object Cube2 : SelectedCube
-}
+// Модель блока
+data class Block(
+    val id: String = UUID.randomUUID().toString(),
+    var position: Offset = Offset.Zero,
+    var size: Size = Size(100f, 100f),
+    var color: Color = DefaultBlockColors[0],
+    var isSelected: Boolean = false
+)
 
 fun main() = application {
     Window(
-        onCloseRequest = { exitApplication() }, // ← вот так!
-        title = "Кубик с рамкой при выборе"
+        onCloseRequest = { exitApplication() },
+        title = "APP KT - Редактор блоков"
     ) {
         Box(
             modifier = Modifier
@@ -68,35 +85,65 @@ fun main() = application {
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun DragWithSelectionBorder() {
-    var cube1 by remember { mutableStateOf(Offset(0f, 0f)) }
-    var cube2 by remember { mutableStateOf(Offset(200f, 150f)) }
-    val cubeSize = Size(100f, 100f)
+    val blocks = remember { mutableStateListOf<Block>() }
     var camera by remember { mutableStateOf(Offset.Zero) }
     var zoom by remember { mutableStateOf(1f) }
-    var selectedCubes by remember { mutableStateOf(setOf<SelectedCube>()) }
-
-    // Состояние рамочного выделения
+    var selectedBlockIds by remember { mutableStateOf(setOf<String>()) }
     var marqueeStart by remember { mutableStateOf<Offset?>(null) }
     var marqueeEnd by remember { mutableStateOf<Offset?>(null) }
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var createPosition by remember { mutableStateOf(Offset.Zero) }
+
+    // Добавляем 2 начальных блока для демонстрации
+    LaunchedEffect(Unit) {
+        if (blocks.isEmpty()) {
+            blocks.add(Block(position = Offset(0f, 0f), color = DefaultBlockColors[0]))
+            blocks.add(Block(position = Offset(200f, 150f), color = DefaultBlockColors[1]))
+        }
+    }
 
     Canvas(
         modifier = Modifier
             .fillMaxSize()
             .background(BackgroundColor)
-            .onPointerEvent(PointerEventType.Scroll) { event ->
-                val delta = event.changes.firstOrNull()?.scrollDelta?.y ?: return@onPointerEvent
-                if (delta == 0f) return@onPointerEvent
+            .onPointerEvent(PointerEventType.Press) { pointerEvent -> // ИСПРАВЛЕНО: правильное имя параметра
+                println(1)
+                if (pointerEvent.button== PointerButton.Secondary) {
+                    val delta = pointerEvent.changes.firstOrNull()?.scrollDelta?.y ?: return@onPointerEvent
+                    if (delta == 0f) return@onPointerEvent
 
-                val mousePos = event.changes.first().position
-                val worldBefore = screenToWorld(mousePos, camera, zoom)
-                zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.2f, 5f)
-                val worldAfter = screenToWorld(mousePos, camera, zoom)
-                camera += (worldBefore - worldAfter)
+                    val mousePos = pointerEvent.changes.first().position
+                    val worldBefore = screenToWorld(mousePos, camera, zoom)
+                    zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.2f, 5f)
+                    val worldAfter = screenToWorld(mousePos, camera, zoom)
+                    camera += (worldBefore - worldAfter)
+                }
             }
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                     while (true) {
                         val down = awaitFirstDown(requireUnconsumed = false)
+
+                        // Проверяем ПКМ (Secondary)
+//                        if (down.button == MouseButton.Secondary) {
+//                            // Проверяем, кликнули ли на существующий блок
+//                            val clickedBlock = blocks.find { block ->
+//                                val screenPos = worldToScreen(block.position, camera, zoom)
+//                                val screenSize = block.size * zoom
+//                                isInside(down.position, screenPos, screenSize)
+//                            }
+//
+//                            if (clickedBlock != null) {
+//                                // ПКМ на блоке → удаляем его
+//                                blocks.remove(clickedBlock)
+//                            } else {
+//                                // ПКМ на фоне → показываем диалог создания
+//                                createPosition = screenToWorld(down.position, camera, zoom)
+//                                showCreateDialog = true
+//                            }
+//                            down.consume()
+//                            continue
+//                        }
 
                         // Если зажат Ctrl → начинаем рамочное выделение
                         if (isCtrlLeftPressed) {
@@ -113,7 +160,7 @@ fun DragWithSelectionBorder() {
                                 move.consume()
                             }
 
-                            // По завершении — выделяем кубики внутри рамки
+                            // По завершении — выделяем блоки внутри рамки
                             marqueeStart?.let { start ->
                                 marqueeEnd?.let { end ->
                                     val rect = Rect(
@@ -121,19 +168,15 @@ fun DragWithSelectionBorder() {
                                         bottomRight = Offset(maxOf(start.x, end.x), maxOf(start.y, end.y))
                                     )
 
-                                    val screen1 = worldToScreen(cube1, camera, zoom)
-                                    val screen2 = worldToScreen(cube2, camera, zoom)
-                                    val size1 = cubeSize * zoom
-                                    val size2 = cubeSize * zoom
-
-                                    val newSelection = mutableSetOf<SelectedCube>()
-                                    if (rect.overlaps(Rect(screen1, size1))) {
-                                        newSelection.add(SelectedCube.Cube1)
+                                    val newSelection = mutableSetOf<String>()
+                                    blocks.forEach { block ->
+                                        val screenPos = worldToScreen(block.position, camera, zoom)
+                                        val screenSize = block.size * zoom
+                                        if (rect.overlaps(Rect(screenPos, screenSize))) {
+                                            newSelection.add(block.id)
+                                        }
                                     }
-                                    if (rect.overlaps(Rect(screen2, size2))) {
-                                        newSelection.add(SelectedCube.Cube2)
-                                    }
-                                    selectedCubes = newSelection
+                                    selectedBlockIds = newSelection
                                 }
                             }
 
@@ -141,16 +184,15 @@ fun DragWithSelectionBorder() {
                             marqueeEnd = null
                         } else {
                             // Обычное перетаскивание
-                            val screen1 = worldToScreen(cube1, camera, zoom)
-                            val screen2 = worldToScreen(cube2, camera, zoom)
-                            val size1 = cubeSize * zoom
-                            val size2 = cubeSize * zoom
+                            val clickedBlock = blocks.find { block ->
+                                val screenPos = worldToScreen(block.position, camera, zoom)
+                                val screenSize = block.size * zoom
+                                isInside(down.position, screenPos, screenSize)
+                            }
 
-                            val isOn1 = isInside(down.position, screen1, size1)
-                            val isOn2 = isInside(down.position, screen2, size2)
-
-                            if (!isOn1 && !isOn2) {
-                                selectedCubes = emptySet()
+                            if (clickedBlock == null) {
+                                // Клик по фону → снимаем выделение
+                                selectedBlockIds = emptySet()
                                 val initialCam = camera
                                 val startPos = down.position
                                 down.consume()
@@ -165,14 +207,11 @@ fun DragWithSelectionBorder() {
                                 continue
                             }
 
-                            val newSelection = mutableSetOf<SelectedCube>().apply {
-                                if (isOn1) add(SelectedCube.Cube1)
-                                if (isOn2) add(SelectedCube.Cube2)
-                            }
-                            selectedCubes = newSelection
+                            // Выделяем блок(и)
+                            selectedBlockIds = setOf(clickedBlock.id)
 
-                            val initial1 = cube1
-                            val initial2 = cube2
+                            // Перетаскивание
+                            val initialPositions = blocks.associate { it.id to it.position }
                             val startPos = down.position
                             down.consume()
 
@@ -182,11 +221,10 @@ fun DragWithSelectionBorder() {
                                 if (move == null || !move.pressed) break
 
                                 val deltaWorld = (move.position - startPos) / zoom
-                                if (SelectedCube.Cube1 in selectedCubes) {
-                                    cube1 = initial1 + deltaWorld
-                                }
-                                if (SelectedCube.Cube2 in selectedCubes) {
-                                    cube2 = initial2 + deltaWorld
+                                blocks.forEach { block ->
+                                    if (block.id in selectedBlockIds) {
+                                        block.position = initialPositions[block.id]!! + deltaWorld
+                                    }
                                 }
                                 move.consume()
                             }
@@ -195,9 +233,12 @@ fun DragWithSelectionBorder() {
                 }
             }
     ) {
-        // Рисуем кубики
-        drawCube(worldToScreen(cube1, camera, zoom), CubeColor1, cubeSize * zoom, SelectedCube.Cube1 in selectedCubes)
-        drawCube(worldToScreen(cube2, camera, zoom), CubeColor2, cubeSize * zoom, SelectedCube.Cube2 in selectedCubes)
+        // Рисуем все блоки
+        blocks.forEach { block ->
+            val screenPos = worldToScreen(block.position, camera, zoom)
+            val screenSize = block.size * zoom
+            drawBlock(screenPos, block.color, screenSize, block.id in selectedBlockIds)
+        }
 
         // Рисуем рамку выделения
         marqueeStart?.let { start ->
@@ -219,6 +260,152 @@ fun DragWithSelectionBorder() {
             }
         }
     }
+
+    // Диалог создания блока
+    if (showCreateDialog) {
+        CreateBlockDialog(
+            onConfirm = { width, height, color ->
+                blocks.add(
+                    Block(
+                        position = createPosition,
+                        size = Size(width, height),
+                        color = color
+                    )
+                )
+                showCreateDialog = false
+            },
+            onCancel = { showCreateDialog = false }
+        )
+    }
+}
+
+@Composable
+fun CreateBlockDialog(
+    onConfirm: (Float, Float, Color) -> Unit,
+    onCancel: () -> Unit
+) {
+    var widthText by remember { mutableStateOf("100") }
+    var heightText by remember { mutableStateOf("100") }
+    var selectedColor by remember { mutableStateOf(DefaultBlockColors[0]) }
+
+    val width = widthText.toFloatOrNull() ?: 100f
+    val height = heightText.toFloatOrNull() ?: 100f
+    val isValid = width in 10f..500f && height in 10f..500f
+
+    Dialog(onDismissRequest = onCancel) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            tonalElevation = 6.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(16.dp)
+                    .width(300.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Создать новый блок",
+                    style = MaterialTheme.typography.titleMedium
+                )
+
+                OutlinedTextField(
+                    value = widthText,
+                    onValueChange = {
+                        // Разрешаем только цифры и точку
+                        widthText = it.filter { char -> char.isDigit() || char == '.' }
+                    },
+                    label = { Text("Ширина (10-500)") },
+                    keyboardOptions = KeyboardOptions.Default,
+                    singleLine = true,
+                    isError = width !in 10f..500f
+                )
+
+                OutlinedTextField(
+                    value = heightText,
+                    onValueChange = {
+                        heightText = it.filter { char -> char.isDigit() || char == '.' }
+                    },
+                    label = { Text("Высота (10-500)") },
+                    keyboardOptions = KeyboardOptions.Default,
+                    singleLine = true,
+                    isError = height !in 10f..500f
+                )
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Цвет блока:", style = MaterialTheme.typography.bodyMedium)
+                    // Сетка 4x2 для цветов
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // Первая строка цветов
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            repeat(4) { index ->
+                                val color = DefaultBlockColors[index]
+                                ColorOption(color, selectedColor) { selectedColor = color }
+                            }
+                        }
+                        // Вторая строка цветов
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            repeat(4) { index ->
+                                val color = DefaultBlockColors[4 + index]
+                                ColorOption(color, selectedColor) { selectedColor = color }
+                            }
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.align(Alignment.End),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(onClick = onCancel, colors = ButtonDefaults.buttonColors(containerColor = Color.Gray)) {
+                        Text("Отмена")
+                    }
+                    Button(
+                        onClick = { onConfirm(width, height, selectedColor) },
+                        enabled = isValid,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
+                    ) {
+                        Text("Создать")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ColorOption(color: Color, selectedColor: Color, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(28.dp)
+            .border(
+                width = if (color == selectedColor) 2.dp else 1.dp,
+                color = if (color == selectedColor) Color.White else Color.Gray,
+                shape = RoundedCornerShape(4.dp)
+            )
+            .background(color, RoundedCornerShape(4.dp))
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        // Ручная отрисовка галочки без использования иконок
+        if (color == selectedColor) {
+            Canvas(modifier = Modifier.size(16.dp)) {
+                drawLine(
+                    color = Color.White,
+                    start = Offset(3f, 8f),
+                    end = Offset(7f, 12f),
+                    strokeWidth = 2f,
+                    cap = StrokeCap.Round
+                )
+                drawLine(
+                    color = Color.White,
+                    start = Offset(7f, 12f),
+                    end = Offset(13f, 4f),
+                    strokeWidth = 2f,
+                    cap = StrokeCap.Round
+                )
+            }
+        }
+    }
 }
 
 // Вспомогательные функции
@@ -232,7 +419,7 @@ private fun isInside(point: Offset, rectTopLeft: Offset, size: Size): Boolean {
             point.y <= rectTopLeft.y + size.height
 }
 
-private fun DrawScope.drawCube(topLeft: Offset, color: Color, size: Size, isSelected: Boolean) {
+private fun DrawScope.drawBlock(topLeft: Offset, color: Color, size: Size, isSelected: Boolean) {
     drawRect(color = color, topLeft = topLeft, size = size)
     if (isSelected) {
         drawRect(

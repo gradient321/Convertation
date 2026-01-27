@@ -6,12 +6,12 @@ abstract class Element {
   var data: Data? = null
 }
 
-open class Block(
+open class Block_(
   var text: String = "",
   var elements: Map<String, Element> = mapOf()
 ): Element()
 
-open class BlockUnderText : Block()
+open class BlockUnderText : Block_()
 
 open class TextElement(
   var text: String = ""
