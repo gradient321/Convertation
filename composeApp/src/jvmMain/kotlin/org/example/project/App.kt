@@ -40,32 +40,24 @@ val DefaultBlockColors = listOf(
 val SelectionBorderColor = Color.White
 const val BorderWidth = 2f
 
-// Модель блока
+// Модель блока (иммутабельная)
 data class Block(
     val id: String = UUID.randomUUID().toString(),
-    var position: Offset = Offset.Zero,
-    var size: Size = Size(100f, 100f),
-    var color: Color = DefaultBlockColors[0],
-    var isSelected: Boolean = false
+    val position: Offset = Offset.Zero,
+    val size: Size = Size(100f, 100f),
+    val color: Color = DefaultBlockColors[0],
+    val isSelected: Boolean = false
 )
 
-// Состояние перетаскивания с точкой захвата
-private data class BlockDragState(
-    val grabbedBlockId: String,             // ID блока, за который захватили
-    val grabOffset: Offset,                 // Смещение от левого верхнего угла блока до точки клика (в мировых координатах)
-    val initialPositions: Map<String, Offset>  // Начальные позиции всех выбранных блоков для сохранения их взаимного расположения
-)
-
-// Состояние панорамирования камеры
-private data class PanState(
-    val initialCamera: Offset,
-    val startPosition: Offset
+// Состояние перетаскивания
+private data class DragState(
+    val offset: Offset // Смещение между курсором и блоком
 )
 
 fun main() = application {
     Window(
         onCloseRequest = { exitApplication() },
-        title = "APP KT - Редактор блоков"
+        title = "APP KT - Редактор блоков (Исправленное перемещение)"
     ) {
         Box(
             modifier = Modifier
@@ -79,38 +71,37 @@ fun main() = application {
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun DragWithSelectionBorder() {
-    val blocks = remember { mutableStateListOf<Block>() }
+    val blocks = remember { mutableStateMapOf<String, Block>() }
     var camera by remember { mutableStateOf(Offset.Zero) }
     var zoom by remember { mutableStateOf(1f) }
-    var selectedBlockIds by remember { mutableStateOf(setOf<String>()) }
+    var selectedBlockId by remember { mutableStateOf<String?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var createPosition by remember { mutableStateOf(Offset.Zero) }
 
-    var blockDragState by remember { mutableStateOf<BlockDragState?>(null) }
+    var dragState by remember { mutableStateOf<DragState?>(null) }
     var panState by remember { mutableStateOf<PanState?>(null) }
 
     Canvas(
         modifier = Modifier
             .fillMaxSize()
             .background(BackgroundColor)
+            .onPointerEvent(PointerEventType.Scroll) { event ->
+                val delta = event.changes.firstOrNull()?.scrollDelta?.y ?: return@onPointerEvent
+                if (delta == 0f) return@onPointerEvent
+
+                val mousePos = event.changes.first().position
+                val worldBefore = screenToWorld(mousePos, camera, zoom)
+                zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.2f, 5f)
+                val worldAfter = screenToWorld(mousePos, camera, zoom)
+                camera += (worldBefore - worldAfter)
+            }
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                     while (true) {
                         val event = awaitPointerEvent()
 
-                        // Обработка колеса мыши
+                        // Обработка колеса мыши (уже обработано выше)
                         if (event.type == PointerEventType.Scroll) {
-                            val scrollChange = event.changes.firstOrNull()
-                            if (scrollChange != null) {
-                                val delta = scrollChange.scrollDelta.y
-                                if (delta != 0f) {
-                                    val mousePos = scrollChange.position
-                                    val worldBefore = screenToWorld(mousePos, camera, zoom)
-                                    zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.2f, 5f)
-                                    val worldAfter = screenToWorld(mousePos, camera, zoom)
-                                    camera += (worldBefore - worldAfter)
-                                }
-                            }
                             continue
                         }
 
@@ -121,14 +112,15 @@ fun DragWithSelectionBorder() {
 
                             if (isRightClick) {
                                 downChange.consume()
-                                val clickedBlockIndex = blocks.indexOfFirst { block ->
+                                val clickedBlockIndex = blocks.values.indexOfFirst { block ->
                                     val screenPos = worldToScreen(block.position, camera, zoom)
                                     val screenSize = block.size * zoom
                                     isInside(downChange.position, screenPos, screenSize)
                                 }
 
                                 if (clickedBlockIndex != -1) {
-                                    blocks.removeAt(clickedBlockIndex)
+                                    val clickedBlock = blocks.values.elementAt(clickedBlockIndex)
+                                    blocks.remove(clickedBlock.id)
                                 } else {
                                     createPosition = screenToWorld(downChange.position, camera, zoom)
                                     showCreateDialog = true
@@ -137,44 +129,27 @@ fun DragWithSelectionBorder() {
                             }
 
                             if (isLeftClick) {
-                                val clickedBlockIndex = blocks.indexOfFirst { block ->
+                                val clickedBlockIndex = blocks.values.indexOfFirst { block ->
                                     val screenPos = worldToScreen(block.position, camera, zoom)
                                     val screenSize = block.size * zoom
                                     isInside(downChange.position, screenPos, screenSize)
                                 }
 
                                 if (clickedBlockIndex != -1) {
-                                    // === КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: ТОЧКА ЗАХВАТА ===
-                                    val clickedBlock = blocks[clickedBlockIndex]
+                                    // Выделяем только один блок
+                                    val clickedBlock = blocks.values.elementAt(clickedBlockIndex)
+                                    selectedBlockId = clickedBlock.id
 
-                                    if (clickedBlock.id !in selectedBlockIds) {
-                                        selectedBlockIds = setOf(clickedBlock.id)
-                                    }
+                                    // Начало перетаскивания: вычисляем смещение между курсором и блоком
+                                    val cursorWorldPos = screenToWorld(downChange.position, camera, zoom)
+                                    val offset = cursorWorldPos - clickedBlock.position
 
-                                    // 1. Преобразуем позицию клика в МИРОВЫЕ координаты
-                                    val worldClickPos = screenToWorld(downChange.position, camera, zoom)
-
-                                    // 2. Вычисляем смещение от ЛЕВОГО ВЕРХНЕГО УГЛА блока до точки клика
-                                    // Это критически важно для плавного перемещения без "прыжков"
-                                    val grabOffset = worldClickPos - clickedBlock.position
-
-                                    // 3. Сохраняем начальные позиции всех выбранных блоков
-                                    val initialPositions = selectedBlockIds.associateWith { id ->
-                                        blocks.find { it.id == id }?.position ?: Offset.Zero
-                                    }
-
-                                    blockDragState = BlockDragState(
-                                        grabbedBlockId = clickedBlock.id,
-                                        grabOffset = grabOffset,
-                                        initialPositions = initialPositions
-                                    )
+                                    dragState = DragState(offset)
                                     downChange.consume()
 
-                                    // === ЦИКЛ ПЕРЕТАСКИВАНИЯ С МГНОВЕННЫМ ОБНОВЛЕНИЕМ ===
                                     while (true) {
                                         val moveEvent = awaitPointerEvent()
 
-                                        // Масштабирование во время перетаскивания
                                         if (moveEvent.type == PointerEventType.Scroll) {
                                             val scrollChange = moveEvent.changes.firstOrNull()
                                             if (scrollChange != null) {
@@ -185,6 +160,16 @@ fun DragWithSelectionBorder() {
                                                     zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.2f, 5f)
                                                     val worldAfter = screenToWorld(mousePos, camera, zoom)
                                                     camera += (worldBefore - worldAfter)
+
+                                                    // Обновляем позицию блока при изменении масштаба
+                                                    if (dragState != null) {
+                                                        val cursorWorldPos = screenToWorld(mousePos, camera, zoom)
+                                                        val newPosition = cursorWorldPos - dragState!!.offset
+                                                        val currentBlock = blocks[selectedBlockId!!]
+                                                        if (currentBlock != null) {
+                                                            blocks[selectedBlockId!!] = currentBlock.copy(position = newPosition)
+                                                        }
+                                                    }
                                                 }
                                             }
                                             continue
@@ -193,31 +178,23 @@ fun DragWithSelectionBorder() {
                                         val moveChange = moveEvent.changes.find { it.id == downChange.id }
                                         if (moveChange == null || !moveChange.pressed) break
 
-                                        // === МГНОВЕННОЕ ОБНОВЛЕНИЕ БЕЗ ЗАДЕРЖЕК ===
-                                        // 1. Текущая позиция мыши в МИРОВЫХ координатах
-                                        val currentWorldPos = screenToWorld(moveChange.position, camera, zoom)
+                                        // Получаем текущую мировую позицию курсора
+                                        val cursorWorldPos = screenToWorld(moveChange.position, camera, zoom)
+                                        // Вычисляем новую позицию блока: курсор - смещение
+                                        val newPosition = cursorWorldPos - dragState!!.offset
 
-                                        // 2. Новая позиция ЛЕВОГО ВЕРХНЕГО УГЛА блока =
-                                        //    текущая позиция мыши МИНУС смещение захвата
-                                        val newBasePosition = currentWorldPos - blockDragState!!.grabOffset
-
-                                        // 3. Обновляем ВСЕ выбранные блоки мгновенно
-                                        blocks.forEach { block ->
-                                            if (block.id in selectedBlockIds) {
-                                                // Сохраняем взаимное расположение блоков
-                                                val initialPos = blockDragState!!.initialPositions[block.id] ?: Offset.Zero
-                                                val baseInitialPos = blockDragState!!.initialPositions[blockDragState!!.grabbedBlockId] ?: Offset.Zero
-                                                val relativeOffset = initialPos - baseInitialPos
-                                                block.position = newBasePosition + relativeOffset
-                                            }
+                                        val currentBlock = blocks[selectedBlockId!!]
+                                        if (currentBlock != null) {
+                                            blocks[selectedBlockId!!] = currentBlock.copy(position = newPosition)
                                         }
 
                                         moveChange.consume()
                                     }
-                                    blockDragState = null
+                                    dragState = null
                                 } else {
-                                    // Панорамирование фона (без изменений)
-                                    selectedBlockIds = emptySet()
+                                    // Клик на пустое место: сбросить выделение
+                                    selectedBlockId = null
+                                    // Начать панорамирование
                                     panState = PanState(
                                         initialCamera = camera,
                                         startPosition = downChange.position
@@ -228,17 +205,6 @@ fun DragWithSelectionBorder() {
                                         val moveEvent = awaitPointerEvent()
 
                                         if (moveEvent.type == PointerEventType.Scroll) {
-                                            val scrollChange = moveEvent.changes.firstOrNull()
-                                            if (scrollChange != null) {
-                                                val delta = scrollChange.scrollDelta.y
-                                                if (delta != 0f) {
-                                                    val mousePos = scrollChange.position
-                                                    val worldBefore = screenToWorld(mousePos, camera, zoom)
-                                                    zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.2f, 5f)
-                                                    val worldAfter = screenToWorld(mousePos, camera, zoom)
-                                                    camera += (worldBefore - worldAfter)
-                                                }
-                                            }
                                             continue
                                         }
 
@@ -259,23 +225,22 @@ fun DragWithSelectionBorder() {
                 }
             }
     ) {
-        blocks.forEach { block ->
+        blocks.values.forEach { block ->
             val screenPos = worldToScreen(block.position, camera, zoom)
             val screenSize = block.size * zoom
-            drawBlock(screenPos, block.color, screenSize, block.id in selectedBlockIds)
+            drawBlock(screenPos, block.color, screenSize, block.id == selectedBlockId)
         }
     }
 
     if (showCreateDialog) {
         CreateBlockDialog(
             onConfirm = { width, height, color ->
-                blocks.add(
-                    Block(
-                        position = createPosition,
-                        size = Size(width, height),
-                        color = color
-                    )
+                val newBlock = Block(
+                    position = createPosition,
+                    size = Size(width, height),
+                    color = color
                 )
+                blocks[newBlock.id] = newBlock
                 showCreateDialog = false
             },
             onCancel = { showCreateDialog = false }
@@ -406,6 +371,11 @@ private fun ColorOption(color: Color, selectedColor: Color, onClick: () -> Unit)
         }
     }
 }
+
+private data class PanState(
+    val initialCamera: Offset,
+    val startPosition: Offset
+)
 
 private fun worldToScreen(world: Offset, camera: Offset, zoom: Float): Offset = (world - camera) * zoom
 private fun screenToWorld(screen: Offset, camera: Offset, zoom: Float): Offset = screen / zoom + camera
