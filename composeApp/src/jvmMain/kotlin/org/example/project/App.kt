@@ -13,24 +13,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.*
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
-import java.util.UUID
+import java.util.*
 
 val BackgroundColor = Color(0xFF1E1E1E)
 val DefaultBlockColors = listOf(
@@ -45,10 +39,6 @@ val DefaultBlockColors = listOf(
 )
 val SelectionBorderColor = Color.White
 const val BorderWidth = 2f
-val MarqueeColor = Color(0x80FFFFFF) // Полупрозрачный белый
-
-// Глобальное состояние Ctrl (доступно везде)
-var isCtrlLeftPressed by mutableStateOf(false)
 
 // Модель блока
 data class Block(
@@ -59,6 +49,19 @@ data class Block(
     var isSelected: Boolean = false
 )
 
+// Состояние перетаскивания с точкой захвата
+private data class BlockDragState(
+    val grabbedBlockId: String,             // ID блока, за который захватили
+    val grabOffset: Offset,                 // Смещение от левого верхнего угла блока до точки клика (в мировых координатах)
+    val initialPositions: Map<String, Offset>  // Начальные позиции всех выбранных блоков для сохранения их взаимного расположения
+)
+
+// Состояние панорамирования камеры
+private data class PanState(
+    val initialCamera: Offset,
+    val startPosition: Offset
+)
+
 fun main() = application {
     Window(
         onCloseRequest = { exitApplication() },
@@ -67,14 +70,6 @@ fun main() = application {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .onPreviewKeyEvent { event ->
-                    if (event.key == Key.CtrlLeft) {
-                        isCtrlLeftPressed = (event.type == KeyEventType.KeyDown)
-                        true
-                    } else {
-                        false
-                    }
-                }
         ) {
             DragWithSelectionBorder()
         }
@@ -88,18 +83,11 @@ fun DragWithSelectionBorder() {
     var camera by remember { mutableStateOf(Offset.Zero) }
     var zoom by remember { mutableStateOf(1f) }
     var selectedBlockIds by remember { mutableStateOf(setOf<String>()) }
-    var marqueeStart by remember { mutableStateOf<Offset?>(null) }
-    var marqueeEnd by remember { mutableStateOf<Offset?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var createPosition by remember { mutableStateOf(Offset.Zero) }
 
-    // Добавляем 2 начальных блока для демонстрации
-    LaunchedEffect(Unit) {
-        if (blocks.isEmpty()) {
-            blocks.add(Block(position = Offset(0f, 0f), color = DefaultBlockColors[0]))
-            blocks.add(Block(position = Offset(200f, 150f), color = DefaultBlockColors[1]))
-        }
-    }
+    var blockDragState by remember { mutableStateOf<BlockDragState?>(null) }
+    var panState by remember { mutableStateOf<PanState?>(null) }
 
     Canvas(
         modifier = Modifier
@@ -110,216 +98,174 @@ fun DragWithSelectionBorder() {
                     while (true) {
                         val event = awaitPointerEvent()
 
-                        // Проверяем скролл
+                        // Обработка колеса мыши
                         if (event.type == PointerEventType.Scroll) {
                             val scrollChange = event.changes.firstOrNull()
                             if (scrollChange != null) {
                                 val delta = scrollChange.scrollDelta.y
                                 if (delta != 0f) {
-                                    // Здесь можно обработать скролл при необходимости
-                                    // Но для простоты оставим как есть
+                                    val mousePos = scrollChange.position
+                                    val worldBefore = screenToWorld(mousePos, camera, zoom)
+                                    zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.2f, 5f)
+                                    val worldAfter = screenToWorld(mousePos, camera, zoom)
+                                    camera += (worldBefore - worldAfter)
                                 }
                             }
                             continue
                         }
 
-                        // Проверяем нажатия
-                        val downChange = event.changes.find { it.changedToDown() }
-                        if (downChange == null) continue
+                        val downChange = event.changes.find { it.pressed && !it.isConsumed }
+                        if (downChange != null) {
+                            val isRightClick = event.buttons.isSecondaryPressed
+                            val isLeftClick = event.buttons.isPrimaryPressed
 
-                        // Проверяем, какая кнопка нажата (через event.buttons)
-                        val isRightClick = event.buttons.isSecondaryPressed
-                        val isLeftClick = event.buttons.isPrimaryPressed
-
-                        if (isRightClick) {
-                            downChange.consume()
-
-                            // Проверяем, кликнули ли на существующий блок
-                            val clickedBlock = blocks.find { block ->
-                                val screenPos = worldToScreen(block.position, camera, zoom)
-                                val screenSize = block.size * zoom
-                                isInside(downChange.position, screenPos, screenSize)
-                            }
-
-                            if (clickedBlock != null) {
-                                // ПКМ на блоке → удаляем его
-                                blocks.remove(clickedBlock)
-                            } else {
-                                // ПКМ на фоне → показываем диалог создания
-                                createPosition = screenToWorld(downChange.position, camera, zoom)
-                                showCreateDialog = true
-                            }
-                            continue
-                        }
-
-                        if (isLeftClick && isCtrlLeftPressed) {
-                            // Рамочное выделение
-                            marqueeStart = downChange.position
-                            marqueeEnd = downChange.position
-                            downChange.consume()
-
-                            while (true) {
-                                val moveEvent = awaitPointerEvent()
-
-                                // Обработка скролла во время выделения
-                                if (moveEvent.type == PointerEventType.Scroll) {
-                                    val scrollChange = moveEvent.changes.firstOrNull()
-                                    if (scrollChange != null) {
-                                        val delta = scrollChange.scrollDelta.y
-                                        if (delta != 0f) {
-                                            val mousePos = scrollChange.position
-                                            val worldBefore = screenToWorld(mousePos, camera, zoom)
-                                            zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.2f, 5f)
-                                            val worldAfter = screenToWorld(mousePos, camera, zoom)
-                                            camera += (worldBefore - worldAfter)
-                                        }
-                                    }
-                                    continue
-                                }
-
-                                val moveChange = moveEvent.changes.find { it.id == downChange.id }
-                                if (moveChange == null || !moveChange.pressed) break
-                                marqueeEnd = moveChange.position
-                                moveChange.consume()
-                            }
-
-                            // Выделение блоков
-                            marqueeStart?.let { start ->
-                                marqueeEnd?.let { end ->
-                                    val rect = Rect(
-                                        topLeft = Offset(minOf(start.x, end.x), minOf(start.y, end.y)),
-                                        bottomRight = Offset(maxOf(start.x, end.x), maxOf(start.y, end.y))
-                                    )
-
-                                    selectedBlockIds = blocks.filter { block ->
-                                        val screenPos = worldToScreen(block.position, camera, zoom)
-                                        val screenSize = block.size * zoom
-                                        rect.overlaps(Rect(screenPos, screenSize))
-                                    }.map { it.id }.toSet()
-                                }
-                            }
-
-                            marqueeStart = null
-                            marqueeEnd = null
-                            continue
-                        }
-
-                        if (isLeftClick) {
-                            // Обычное перетаскивание
-                            val clickedBlock = blocks.find { block ->
-                                val screenPos = worldToScreen(block.position, camera, zoom)
-                                val screenSize = block.size * zoom
-                                isInside(downChange.position, screenPos, screenSize)
-                            }
-
-                            if (clickedBlock == null) {
-                                // Перетаскивание фона
-                                selectedBlockIds = emptySet()
-                                val initialCam = camera
-                                val startPos = downChange.position
+                            if (isRightClick) {
                                 downChange.consume()
+                                val clickedBlockIndex = blocks.indexOfFirst { block ->
+                                    val screenPos = worldToScreen(block.position, camera, zoom)
+                                    val screenSize = block.size * zoom
+                                    isInside(downChange.position, screenPos, screenSize)
+                                }
 
-                                while (true) {
-                                    val moveEvent = awaitPointerEvent()
-
-                                    // Обработка скролла во время перетаскивания фона
-                                    if (moveEvent.type == PointerEventType.Scroll) {
-                                        val scrollChange = moveEvent.changes.firstOrNull()
-                                        if (scrollChange != null) {
-                                            val delta = scrollChange.scrollDelta.y
-                                            if (delta != 0f) {
-                                                val mousePos = scrollChange.position
-                                                val worldBefore = screenToWorld(mousePos, camera, zoom)
-                                                zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.2f, 5f)
-                                                val worldAfter = screenToWorld(mousePos, camera, zoom)
-                                                camera += (worldBefore - worldAfter)
-                                            }
-                                        }
-                                        continue
-                                    }
-
-                                    val moveChange = moveEvent.changes.find { it.id == downChange.id }
-                                    if (moveChange == null || !moveChange.pressed) break
-                                    val deltaWorld = (moveChange.position - startPos) / zoom
-                                    camera = initialCam - deltaWorld
-                                    moveChange.consume()
+                                if (clickedBlockIndex != -1) {
+                                    blocks.removeAt(clickedBlockIndex)
+                                } else {
+                                    createPosition = screenToWorld(downChange.position, camera, zoom)
+                                    showCreateDialog = true
                                 }
                                 continue
                             }
 
-                            // Выделение и перетаскивание блока
-                            if (clickedBlock.id !in selectedBlockIds) {
-                                selectedBlockIds = setOf(clickedBlock.id)
-                            }
+                            if (isLeftClick) {
+                                val clickedBlockIndex = blocks.indexOfFirst { block ->
+                                    val screenPos = worldToScreen(block.position, camera, zoom)
+                                    val screenSize = block.size * zoom
+                                    isInside(downChange.position, screenPos, screenSize)
+                                }
 
-                            val initialPositions = blocks.associate { it.id to it.position }
-                            val startPos = downChange.position
-                            downChange.consume()
+                                if (clickedBlockIndex != -1) {
+                                    // === КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: ТОЧКА ЗАХВАТА ===
+                                    val clickedBlock = blocks[clickedBlockIndex]
 
-                            while (true) {
-                                val moveEvent = awaitPointerEvent()
+                                    if (clickedBlock.id !in selectedBlockIds) {
+                                        selectedBlockIds = setOf(clickedBlock.id)
+                                    }
 
-                                // Обработка скролла во время перетаскивания блока
-                                if (moveEvent.type == PointerEventType.Scroll) {
-                                    val scrollChange = moveEvent.changes.firstOrNull()
-                                    if (scrollChange != null) {
-                                        val delta = scrollChange.scrollDelta.y
-                                        if (delta != 0f) {
-                                            val mousePos = scrollChange.position
-                                            val worldBefore = screenToWorld(mousePos, camera, zoom)
-                                            zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.2f, 5f)
-                                            val worldAfter = screenToWorld(mousePos, camera, zoom)
-                                            camera += (worldBefore - worldAfter)
+                                    // 1. Преобразуем позицию клика в МИРОВЫЕ координаты
+                                    val worldClickPos = screenToWorld(downChange.position, camera, zoom)
+
+                                    // 2. Вычисляем смещение от ЛЕВОГО ВЕРХНЕГО УГЛА блока до точки клика
+                                    // Это критически важно для плавного перемещения без "прыжков"
+                                    val grabOffset = worldClickPos - clickedBlock.position
+
+                                    // 3. Сохраняем начальные позиции всех выбранных блоков
+                                    val initialPositions = selectedBlockIds.associateWith { id ->
+                                        blocks.find { it.id == id }?.position ?: Offset.Zero
+                                    }
+
+                                    blockDragState = BlockDragState(
+                                        grabbedBlockId = clickedBlock.id,
+                                        grabOffset = grabOffset,
+                                        initialPositions = initialPositions
+                                    )
+                                    downChange.consume()
+
+                                    // === ЦИКЛ ПЕРЕТАСКИВАНИЯ С МГНОВЕННЫМ ОБНОВЛЕНИЕМ ===
+                                    while (true) {
+                                        val moveEvent = awaitPointerEvent()
+
+                                        // Масштабирование во время перетаскивания
+                                        if (moveEvent.type == PointerEventType.Scroll) {
+                                            val scrollChange = moveEvent.changes.firstOrNull()
+                                            if (scrollChange != null) {
+                                                val delta = scrollChange.scrollDelta.y
+                                                if (delta != 0f) {
+                                                    val mousePos = scrollChange.position
+                                                    val worldBefore = screenToWorld(mousePos, camera, zoom)
+                                                    zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.2f, 5f)
+                                                    val worldAfter = screenToWorld(mousePos, camera, zoom)
+                                                    camera += (worldBefore - worldAfter)
+                                                }
+                                            }
+                                            continue
                                         }
-                                    }
-                                    continue
-                                }
 
-                                val moveChange = moveEvent.changes.find { it.id == downChange.id }
-                                if (moveChange == null || !moveChange.pressed) break
+                                        val moveChange = moveEvent.changes.find { it.id == downChange.id }
+                                        if (moveChange == null || !moveChange.pressed) break
 
-                                val deltaWorld = (moveChange.position - startPos) / zoom
-                                blocks.forEach { block ->
-                                    if (block.id in selectedBlockIds) {
-                                        block.position = initialPositions[block.id]!! + deltaWorld
+                                        // === МГНОВЕННОЕ ОБНОВЛЕНИЕ БЕЗ ЗАДЕРЖЕК ===
+                                        // 1. Текущая позиция мыши в МИРОВЫХ координатах
+                                        val currentWorldPos = screenToWorld(moveChange.position, camera, zoom)
+
+                                        // 2. Новая позиция ЛЕВОГО ВЕРХНЕГО УГЛА блока =
+                                        //    текущая позиция мыши МИНУС смещение захвата
+                                        val newBasePosition = currentWorldPos - blockDragState!!.grabOffset
+
+                                        // 3. Обновляем ВСЕ выбранные блоки мгновенно
+                                        blocks.forEach { block ->
+                                            if (block.id in selectedBlockIds) {
+                                                // Сохраняем взаимное расположение блоков
+                                                val initialPos = blockDragState!!.initialPositions[block.id] ?: Offset.Zero
+                                                val baseInitialPos = blockDragState!!.initialPositions[blockDragState!!.grabbedBlockId] ?: Offset.Zero
+                                                val relativeOffset = initialPos - baseInitialPos
+                                                block.position = newBasePosition + relativeOffset
+                                            }
+                                        }
+
+                                        moveChange.consume()
                                     }
+                                    blockDragState = null
+                                } else {
+                                    // Панорамирование фона (без изменений)
+                                    selectedBlockIds = emptySet()
+                                    panState = PanState(
+                                        initialCamera = camera,
+                                        startPosition = downChange.position
+                                    )
+                                    downChange.consume()
+
+                                    while (true) {
+                                        val moveEvent = awaitPointerEvent()
+
+                                        if (moveEvent.type == PointerEventType.Scroll) {
+                                            val scrollChange = moveEvent.changes.firstOrNull()
+                                            if (scrollChange != null) {
+                                                val delta = scrollChange.scrollDelta.y
+                                                if (delta != 0f) {
+                                                    val mousePos = scrollChange.position
+                                                    val worldBefore = screenToWorld(mousePos, camera, zoom)
+                                                    zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.2f, 5f)
+                                                    val worldAfter = screenToWorld(mousePos, camera, zoom)
+                                                    camera += (worldBefore - worldAfter)
+                                                }
+                                            }
+                                            continue
+                                        }
+
+                                        val moveChange = moveEvent.changes.find { it.id == downChange.id }
+                                        if (moveChange == null || !moveChange.pressed) break
+
+                                        val deltaScreen = moveChange.position - panState!!.startPosition
+                                        val deltaWorld = deltaScreen / zoom
+                                        camera = panState!!.initialCamera - deltaWorld
+
+                                        moveChange.consume()
+                                    }
+                                    panState = null
                                 }
-                                moveChange.consume()
                             }
                         }
                     }
                 }
             }
     ) {
-        // Рисуем все блоки
         blocks.forEach { block ->
             val screenPos = worldToScreen(block.position, camera, zoom)
             val screenSize = block.size * zoom
             drawBlock(screenPos, block.color, screenSize, block.id in selectedBlockIds)
         }
-
-        // Рисуем рамку выделения
-        marqueeStart?.let { start ->
-            marqueeEnd?.let { end ->
-                val left = minOf(start.x, end.x)
-                val top = minOf(start.y, end.y)
-                val right = maxOf(start.x, end.x)
-                val bottom = maxOf(start.y, end.y)
-                drawRect(
-                    color = MarqueeColor,
-                    topLeft = Offset(left, top),
-                    size = Size(right - left, bottom - top),
-                    style = Stroke(
-                        width = 1f,
-                        cap = StrokeCap.Butt,
-                        join = StrokeJoin.Miter
-                    )
-                )
-            }
-        }
     }
 
-    // Диалог создания блока
     if (showCreateDialog) {
         CreateBlockDialog(
             onConfirm = { width, height, color ->
@@ -369,11 +315,10 @@ fun CreateBlockDialog(
                 OutlinedTextField(
                     value = widthText,
                     onValueChange = {
-                        // Разрешаем только цифры и точку
                         widthText = it.filter { char -> char.isDigit() || char == '.' }
                     },
                     label = { Text("Ширина (10-500)") },
-                    keyboardOptions = KeyboardOptions.Default,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
                     isError = width !in 10f..500f
                 )
@@ -384,23 +329,20 @@ fun CreateBlockDialog(
                         heightText = it.filter { char -> char.isDigit() || char == '.' }
                     },
                     label = { Text("Высота (10-500)") },
-                    keyboardOptions = KeyboardOptions.Default,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
                     isError = height !in 10f..500f
                 )
 
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Цвет блока:", style = MaterialTheme.typography.bodyMedium)
-                    // Сетка 4x2 для цветов
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        // Первая строка цветов
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             repeat(4) { index ->
                                 val color = DefaultBlockColors[index]
                                 ColorOption(color, selectedColor) { selectedColor = color }
                             }
                         }
-                        // Вторая строка цветов
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             repeat(4) { index ->
                                 val color = DefaultBlockColors[4 + index]
@@ -444,7 +386,6 @@ private fun ColorOption(color: Color, selectedColor: Color, onClick: () -> Unit)
             .clickable { onClick() },
         contentAlignment = Alignment.Center
     ) {
-        // Ручная отрисовка галочки без использования иконок
         if (color == selectedColor) {
             Canvas(modifier = Modifier.size(16.dp)) {
                 drawLine(
@@ -466,7 +407,6 @@ private fun ColorOption(color: Color, selectedColor: Color, onClick: () -> Unit)
     }
 }
 
-// Вспомогательные функции
 private fun worldToScreen(world: Offset, camera: Offset, zoom: Float): Offset = (world - camera) * zoom
 private fun screenToWorld(screen: Offset, camera: Offset, zoom: Float): Offset = screen / zoom + camera
 
