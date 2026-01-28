@@ -4,8 +4,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -29,27 +31,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.IntOffset
 import java.util.*
 import kotlin.math.roundToInt
-
-// Определение классов элементов
-abstract class Element
-
-data class TextElement(
-    val text: String = ""
-) : Element()
-
-data class IntElement(
-    val int: Int = 0
-) : Element()
-
-data class DoubleElement(
-    val double: Double = 0.0
-) : Element()
-
-data class ChoiceElement(
-    val text: String = "",
-    val choices: List<String> = listOf(),
-    val isOnlyChoices: Boolean = false
-) : Element()
+import org.example.project.*
 
 // Константы для цветов и стилей
 val BackgroundColor = Color(0xFF1E1E1E)
@@ -112,6 +94,10 @@ fun BlockComponent(
                 is IntElement -> content.int.toString()
                 is DoubleElement -> content.double.toString()
                 is ChoiceElement -> content.text
+                is Block_ -> content.text
+                is BlockUnderText -> content.text
+                is IntLimitElement -> content.int.toString()
+                is DoubleLimitElement -> content.double.toString()
                 else -> "Unknown element"
             }
             Text(
@@ -164,14 +150,25 @@ fun DragWithSelectionBorder() {
             .fillMaxSize()
             .background(BackgroundColor)
             .onPointerEvent(PointerEventType.Scroll) { event ->
+                // Не обрабатываем колесо мыши, если диалоги открыты
+                if (showCreateDialog || showEditDialog || showContextMenu) {
+                    return@onPointerEvent
+                }
+
                 val delta = event.changes.firstOrNull()?.scrollDelta?.y ?: return@onPointerEvent
                 if (delta == 0f) return@onPointerEvent
 
-                val mousePos = event.changes.first().position
-                val worldBefore = screenToWorld(mousePos, camera, zoom)
-                zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.2f, 5f)
-                val worldAfter = screenToWorld(mousePos, camera, zoom)
-                camera += (worldBefore - worldAfter)
+                // Проверяем, зажата ли клавиша Ctrl
+                if (event.changes.first().modifiers.isCtrlPressed) {
+                    val mousePos = event.changes.first().position
+                    val worldBefore = screenToWorld(mousePos, camera, zoom)
+                    zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.2f, 5f)
+                    val worldAfter = screenToWorld(mousePos, camera, zoom)
+                    camera += (worldBefore - worldAfter)
+                } else {
+                    // Просто прокручиваем область блоков
+                    camera += Offset(0f, delta * 10f)
+                }
             }
             .pointerInput(Unit) {
                 awaitPointerEventScope {
@@ -409,7 +406,18 @@ fun CreateBlockDialog(
     var selectedColor by remember { mutableStateOf(initialColor) }
 
     // Создаем список доступных типов элементов
-    val elementTypes = listOf("TextElement", "IntElement", "DoubleElement", "ChoiceElement")
+    val elementTypes = listOf(
+        "TextElement",
+        "IntElement",
+        "DoubleElement",
+        "ChoiceElement",
+        "Block_",
+        "BlockUnderText",
+        "IntLimitElement",
+        "DoubleLimitElement"
+    )
+
+    // Используем mutableStateOf для типа элемента
     var elementType by remember { mutableStateOf("TextElement") }
     var expanded by remember { mutableStateOf(false) }
 
@@ -418,6 +426,9 @@ fun CreateBlockDialog(
     var doubleContent by remember { mutableStateOf("0.0") }
     var choicesContent by remember { mutableStateOf("") }
     var isOnlyChoices by remember { mutableStateOf(false) }
+    var intLimitContent by remember { mutableStateOf("0") }
+    var doubleLimitContent by remember { mutableStateOf("0.0") }
+    var limitRanges by remember { mutableStateOf("") }
 
     // Устанавливаем начальные значения для элемента
     when (initialContent) {
@@ -438,6 +449,24 @@ fun CreateBlockDialog(
             choicesContent = initialContent.text
             isOnlyChoices = initialContent.isOnlyChoices
         }
+        is Block_ -> {
+            elementType = "Block_"
+            textContent = initialContent.text
+        }
+        is BlockUnderText -> {
+            elementType = "BlockUnderText"
+            textContent = initialContent.text
+        }
+        is IntLimitElement -> {
+            elementType = "IntLimitElement"
+            intLimitContent = initialContent.int.toString()
+            limitRanges = initialContent.limit.joinToString(", ") { "[${it.start}..${it.endInclusive}]" }
+        }
+        is DoubleLimitElement -> {
+            elementType = "DoubleLimitElement"
+            doubleLimitContent = initialContent.double.toString()
+            limitRanges = initialContent.limit.joinToString(", ") { "[${it.from}..${it.to}]" }
+        }
         else -> {
             elementType = "TextElement"
         }
@@ -447,8 +476,8 @@ fun CreateBlockDialog(
     val height = heightText.toFloatOrNull() ?: 100f
     val isValid = width in 10f..5000f && height in 10f..5000f
 
-    // Добавляем логику обновления содержимого при изменении типа элемента
-    if (remember { mutableStateOf(elementType) }.value != elementType) {
+    // Обновляем содержимое при изменении типа элемента
+    LaunchedEffect(elementType) {
         when (elementType) {
             "TextElement" -> {
                 textContent = ""
@@ -456,6 +485,9 @@ fun CreateBlockDialog(
                 doubleContent = "0.0"
                 choicesContent = ""
                 isOnlyChoices = false
+                intLimitContent = "0"
+                doubleLimitContent = "0.0"
+                limitRanges = ""
             }
             "IntElement" -> {
                 textContent = ""
@@ -463,6 +495,9 @@ fun CreateBlockDialog(
                 doubleContent = "0.0"
                 choicesContent = ""
                 isOnlyChoices = false
+                intLimitContent = "0"
+                doubleLimitContent = "0.0"
+                limitRanges = ""
             }
             "DoubleElement" -> {
                 textContent = ""
@@ -470,6 +505,9 @@ fun CreateBlockDialog(
                 doubleContent = "0.0"
                 choicesContent = ""
                 isOnlyChoices = false
+                intLimitContent = "0"
+                doubleLimitContent = "0.0"
+                limitRanges = ""
             }
             "ChoiceElement" -> {
                 textContent = ""
@@ -477,6 +515,49 @@ fun CreateBlockDialog(
                 doubleContent = "0.0"
                 choicesContent = ""
                 isOnlyChoices = false
+                intLimitContent = "0"
+                doubleLimitContent = "0.0"
+                limitRanges = ""
+            }
+            "Block_" -> {
+                textContent = ""
+                intContent = "0"
+                doubleContent = "0.0"
+                choicesContent = ""
+                isOnlyChoices = false
+                intLimitContent = "0"
+                doubleLimitContent = "0.0"
+                limitRanges = ""
+            }
+            "BlockUnderText" -> {
+                textContent = ""
+                intContent = "0"
+                doubleContent = "0.0"
+                choicesContent = ""
+                isOnlyChoices = false
+                intLimitContent = "0"
+                doubleLimitContent = "0.0"
+                limitRanges = ""
+            }
+            "IntLimitElement" -> {
+                textContent = ""
+                intContent = "0"
+                doubleContent = "0.0"
+                choicesContent = ""
+                isOnlyChoices = false
+                intLimitContent = "0"
+                doubleLimitContent = "0.0"
+                limitRanges = ""
+            }
+            "DoubleLimitElement" -> {
+                textContent = ""
+                intContent = "0"
+                doubleContent = "0.0"
+                choicesContent = ""
+                isOnlyChoices = false
+                intLimitContent = "0"
+                doubleLimitContent = "0.0"
+                limitRanges = ""
             }
         }
     }
@@ -490,6 +571,48 @@ fun CreateBlockDialog(
             choices = choicesContent.split(",").filter { it.isNotBlank() },
             isOnlyChoices = isOnlyChoices
         )
+        "Block_" -> Block_(textContent, emptyMap())
+        "BlockUnderText" -> BlockUnderText(textContent, emptyMap())
+        "IntLimitElement" -> {
+            val limits = limitRanges.split(",")
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .map { rangeStr ->
+                    val parts = rangeStr.trim('[', ']').split("..")
+                    if (parts.size == 2) {
+                        try {
+                            val start = parts[0].toInt()
+                            val end = parts[1].toInt()
+                            start..end
+                        } catch (e: Exception) {
+                            Int.MIN_VALUE..Int.MAX_VALUE
+                        }
+                    } else {
+                        Int.MIN_VALUE..Int.MAX_VALUE
+                    }
+                }
+            IntLimitElement(intLimitContent.toIntOrNull() ?: 0, limits)
+        }
+        "DoubleLimitElement" -> {
+            val limits = limitRanges.split(",")
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .map { rangeStr ->
+                    val parts = rangeStr.trim('[', ']').split("..")
+                    if (parts.size == 2) {
+                        try {
+                            val start = parts[0].toDouble()
+                            val end = parts[1].toDouble()
+                            start..end
+                        } catch (e: Exception) {
+                            Double.MIN_VALUE..Double.MAX_VALUE
+                        }
+                    } else {
+                        Double.MIN_VALUE..Double.MAX_VALUE
+                    }
+                }
+            DoubleLimitElement(doubleLimitContent.toDoubleOrNull() ?: 0.0, limits)
+        }
         else -> null
     }
 
@@ -501,7 +624,8 @@ fun CreateBlockDialog(
             Column(
                 modifier = Modifier
                     .padding(16.dp)
-                    .width(300.dp),
+                    .width(300.dp)
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
@@ -531,32 +655,38 @@ fun CreateBlockDialog(
                     isError = height !in 10f..5000f
                 )
 
-                // Выбор типа элемента через выпадающее меню
-                OutlinedTextField(
-                    value = elementType,
-                    onValueChange = {},
-                    label = { Text("Тип элемента") },
-                    readOnly = true,
-                    trailingIcon = {
-                        Text("↓", modifier = Modifier.padding(end = 8.dp))
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { expanded = true }
-                )
+                // Новая кнопка для выбора типа элемента
+                Box {
+                    Button(
+                        onClick = { expanded = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(text = elementType)
+                            Text(
+                                text = "↓",
+                                modifier = Modifier.padding(start = 8.dp)
+                            )
+                        }
+                    }
 
-                DropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false }
-                ) {
-                    elementTypes.forEach { type ->
-                        DropdownMenuItem(
-                            text = { Text(type) },
-                            onClick = {
-                                elementType = type
-                                expanded = false
-                            }
-                        )
+                    DropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false },
+                        modifier = Modifier
+                            .width(200.dp)
+                            .align(Alignment.TopStart)
+                            .offset(y = 32.dp)
+                    ) {
+                        elementTypes.forEach { type ->
+                            DropdownMenuItem(
+                                text = { Text(type) },
+                                onClick = {
+                                    elementType = type
+                                    expanded = false
+                                }
+                            )
+                        }
                     }
                 }
 
@@ -602,6 +732,55 @@ fun CreateBlockDialog(
                             )
                             Text("Только выбор из вариантов")
                         }
+                    }
+                    "Block_" -> {
+                        OutlinedTextField(
+                            value = textContent,
+                            onValueChange = { textContent = it },
+                            label = { Text("Текст блока") },
+                            singleLine = true
+                        )
+                    }
+                    "BlockUnderText" -> {
+                        OutlinedTextField(
+                            value = textContent,
+                            onValueChange = { textContent = it },
+                            label = { Text("Текст блока") },
+                            singleLine = true
+                        )
+                    }
+                    "IntLimitElement" -> {
+                        OutlinedTextField(
+                            value = intLimitContent,
+                            onValueChange = { intLimitContent = it.filter { char -> char.isDigit() || char == '.' } },
+                            label = { Text("Целое число") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = limitRanges,
+                            onValueChange = { limitRanges = it },
+                            label = { Text("Ограничения (формат: [0..100], [200..300])") },
+                            singleLine = true
+                        )
+                    }
+                    "DoubleLimitElement" -> {
+                        OutlinedTextField(
+                            value = doubleLimitContent,
+                            onValueChange = { doubleLimitContent = it.filter { char -> char.isDigit() || char == '.' } },
+                            label = { Text("Дробное число") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = limitRanges,
+                            onValueChange = { limitRanges = it },
+                            label = { Text("Ограничения (формат: [0.0..100.0], [200.0..300.0])") },
+                            singleLine = true
+                        )
+                    }
+                    else -> {
+                        // Ничего не отображаем для неизвестных типов
                     }
                 }
 
