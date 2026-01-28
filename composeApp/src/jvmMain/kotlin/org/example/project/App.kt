@@ -20,6 +20,11 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.*
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -28,6 +33,28 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import java.util.*
 
+// Определение классов элементов
+abstract class Element
+
+data class TextElement(
+    val text: String = ""
+) : Element()
+
+data class IntElement(
+    val int: Int = 0
+) : Element()
+
+data class DoubleElement(
+    val double: Double = 0.0
+) : Element()
+
+data class ChoiceElement(
+    val text: String = "",
+    val choices: List<String> = listOf(),
+    val isOnlyChoices: Boolean = false
+) : Element()
+
+// Константы для цветов и стилей
 val BackgroundColor = Color(0xFF1E1E1E)
 val DefaultBlockColors = listOf(
     Color(0xFF4A148C),  // Фиолетовый
@@ -42,18 +69,25 @@ val DefaultBlockColors = listOf(
 val SelectionBorderColor = Color.White
 const val BorderWidth = 2f
 
-// Модель блока (иммутабельная)
+// Модель блока
 data class Block(
     val id: String = UUID.randomUUID().toString(),
     val position: Offset = Offset.Zero,
     val size: Size = Size(100f, 100f),
     val color: Color = DefaultBlockColors[0],
-    val isSelected: Boolean = false
+    val isSelected: Boolean = false,
+    val content: Element? = null
 )
 
 // Состояние перетаскивания
 private data class DragState(
     val offset: Offset // Смещение между курсором и блоком
+)
+
+// Состояние панорамирования камеры
+private data class PanState(
+    val initialCamera: Offset,
+    val startPosition: Offset
 )
 
 fun main() = application {
@@ -239,10 +273,10 @@ fun DragWithSelectionBorder() {
                 }
             }
     ) {
-        blocks.values.forEach { block ->
+        blocks.values.forEach c@{ block ->
             val screenPos = worldToScreen(block.position, camera, zoom)
             val screenSize = block.size * zoom
-            drawBlock(screenPos, block.color, screenSize, block.id == selectedBlockId)
+            drawBlock(screenPos, block.color, screenSize, block.id == selectedBlockId, block.content)
         }
     }
 
@@ -252,11 +286,13 @@ fun DragWithSelectionBorder() {
             initialWidth = 100f,
             initialHeight = 100f,
             initialColor = DefaultBlockColors[0],
-            onConfirm = { width, height, color ->
+            initialContent = null,
+            onConfirm = { width, height, color, content ->
                 val newBlock = Block(
                     position = createPosition,
                     size = Size(width, height),
-                    color = color
+                    color = color,
+                    content = content
                 )
                 blocks[newBlock.id] = newBlock
                 showCreateDialog = false
@@ -271,10 +307,12 @@ fun DragWithSelectionBorder() {
             initialWidth = blockToEdit!!.size.width,
             initialHeight = blockToEdit!!.size.height,
             initialColor = blockToEdit!!.color,
-            onConfirm = { width, height, color ->
+            initialContent = blockToEdit!!.content,
+            onConfirm = { width, height, color, content ->
                 val updatedBlock = blockToEdit!!.copy(
                     size = Size(width, height),
-                    color = color
+                    color = color,
+                    content = content
                 )
                 blocks[updatedBlock.id] = updatedBlock
                 showEditDialog = false
@@ -322,16 +360,59 @@ fun CreateBlockDialog(
     initialWidth: Float = 100f,
     initialHeight: Float = 100f,
     initialColor: Color = DefaultBlockColors[0],
-    onConfirm: (Float, Float, Color) -> Unit,
+    initialContent: Element? = null,
+    onConfirm: (Float, Float, Color, Element?) -> Unit,
     onCancel: () -> Unit
 ) {
     var widthText by remember { mutableStateOf(initialWidth.toString()) }
     var heightText by remember { mutableStateOf(initialHeight.toString()) }
     var selectedColor by remember { mutableStateOf(initialColor) }
+    var elementType by remember { mutableStateOf("TextElement") }
+    var textContent by remember { mutableStateOf("") }
+    var intContent by remember { mutableStateOf("0") }
+    var doubleContent by remember { mutableStateOf("0.0") }
+    var choicesContent by remember { mutableStateOf("") }
+    var isOnlyChoices by remember { mutableStateOf(false) }
+
+    // Устанавливаем начальные значения для элемента
+    when (initialContent) {
+        is TextElement -> {
+            elementType = "TextElement"
+            textContent = initialContent.text
+        }
+        is IntElement -> {
+            elementType = "IntElement"
+            intContent = initialContent.int.toString()
+        }
+        is DoubleElement -> {
+            elementType = "DoubleElement"
+            doubleContent = initialContent.double.toString()
+        }
+        is ChoiceElement -> {
+            elementType = "ChoiceElement"
+            choicesContent = initialContent.text
+            isOnlyChoices = initialContent.isOnlyChoices
+        }
+        else -> {
+            elementType = "TextElement"
+        }
+    }
 
     val width = widthText.toFloatOrNull() ?: 100f
     val height = heightText.toFloatOrNull() ?: 100f
     val isValid = width in 10f..5000f && height in 10f..5000f
+
+    val content: Element? = when (elementType) {
+        "TextElement" -> TextElement(textContent)
+        "IntElement" -> IntElement(intContent.toIntOrNull() ?: 0)
+        "DoubleElement" -> DoubleElement(doubleContent.toDoubleOrNull() ?: 0.0)
+        "ChoiceElement" -> ChoiceElement(
+            text = choicesContent,
+            choices = choicesContent.split(",").filter { it.isNotBlank() },
+            isOnlyChoices = isOnlyChoices
+        )
+        else -> null
+    }
 
     Dialog(onDismissRequest = onCancel) {
         Surface(
@@ -371,6 +452,59 @@ fun CreateBlockDialog(
                     isError = height !in 10f..5000f
                 )
 
+                // Выбор типа элемента
+                OutlinedTextField(
+                    value = elementType,
+                    onValueChange = { elementType = it },
+                    label = { Text("Тип элемента") },
+                    singleLine = true
+                )
+
+                // В зависимости от типа элемента отображаем соответствующие поля
+                when (elementType) {
+                    "TextElement" -> {
+                        OutlinedTextField(
+                            value = textContent,
+                            onValueChange = { textContent = it },
+                            label = { Text("Текст") },
+                            singleLine = true
+                        )
+                    }
+                    "IntElement" -> {
+                        OutlinedTextField(
+                            value = intContent,
+                            onValueChange = { intContent = it.filter { char -> char.isDigit() || char == '.' } },
+                            label = { Text("Целое число") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true
+                        )
+                    }
+                    "DoubleElement" -> {
+                        OutlinedTextField(
+                            value = doubleContent,
+                            onValueChange = { doubleContent = it.filter { char -> char.isDigit() || char == '.' } },
+                            label = { Text("Дробное число") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true
+                        )
+                    }
+                    "ChoiceElement" -> {
+                        OutlinedTextField(
+                            value = choicesContent,
+                            onValueChange = { choicesContent = it },
+                            label = { Text("Варианты (через запятую)") },
+                            singleLine = true
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = isOnlyChoices,
+                                onCheckedChange = { isOnlyChoices = it }
+                            )
+                            Text("Только выбор из вариантов")
+                        }
+                    }
+                }
+
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Цвет блока:", style = MaterialTheme.typography.bodyMedium)
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -397,7 +531,7 @@ fun CreateBlockDialog(
                         Text("Отмена")
                     }
                     Button(
-                        onClick = { onConfirm(width, height, selectedColor) },
+                        onClick = { onConfirm(width, height, selectedColor, content) },
                         enabled = isValid,
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
                     ) {
@@ -521,11 +655,6 @@ private fun ColorOption(color: Color, selectedColor: Color, onClick: () -> Unit)
     }
 }
 
-private data class PanState(
-    val initialCamera: Offset,
-    val startPosition: Offset
-)
-
 private fun worldToScreen(world: Offset, camera: Offset, zoom: Float): Offset = (world - camera) * zoom
 private fun screenToWorld(screen: Offset, camera: Offset, zoom: Float): Offset = screen / zoom + camera
 
@@ -535,8 +664,8 @@ private fun isInside(point: Offset, rectTopLeft: Offset, size: Size): Boolean {
             point.y >= rectTopLeft.y &&
             point.y <= rectTopLeft.y + size.height
 }
-
-private fun DrawScope.drawBlock(topLeft: Offset, color: Color, size: Size, isSelected: Boolean) {
+@Composable
+private fun DrawScope.drawBlock(topLeft: Offset, color: Color, size: Size, isSelected: Boolean, content: Element?) {
     drawRect(color = color, topLeft = topLeft, size = size)
     if (isSelected) {
         drawRect(
@@ -544,6 +673,31 @@ private fun DrawScope.drawBlock(topLeft: Offset, color: Color, size: Size, isSel
             topLeft = topLeft,
             size = size,
             style = Stroke(width = BorderWidth)
+        )
+    }
+
+    // Отрисовка содержимого элемента
+    if (content != null) {
+        val text = when (content) {
+            is TextElement -> content.text
+            is IntElement -> content.int.toString()
+            is DoubleElement -> content.double.toString()
+            is ChoiceElement -> content.text
+            else -> "Unknown element"
+        }
+
+        val textMeasurer = rememberTextMeasurer()
+        val textLayoutResult = textMeasurer.measure(
+            text = text,
+            style = TextStyle(
+                color = Color.Black,
+                fontSize = 16.sp
+            )
+        )
+
+        drawText(
+            textLayoutResult = textLayoutResult,
+            topLeft = topLeft + Offset(5f, 5f)
         )
     }
 }
