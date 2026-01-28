@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -78,6 +79,15 @@ fun DragWithSelectionBorder() {
     var showCreateDialog by remember { mutableStateOf(false) }
     var createPosition by remember { mutableStateOf(Offset.Zero) }
 
+    // Состояния для контекстного меню
+    var showContextMenu by remember { mutableStateOf(false) }
+    var contextMenuPosition by remember { mutableStateOf(Offset.Zero) }
+    var selectedBlockForContextMenu by remember { mutableStateOf<Block?>(null) }
+
+    // Состояния для редактирования блока
+    var showEditDialog by remember { mutableStateOf(false) }
+    var blockToEdit by remember { mutableStateOf<Block?>(null) }
+
     var dragState by remember { mutableStateOf<DragState?>(null) }
     var panState by remember { mutableStateOf<PanState?>(null) }
 
@@ -120,7 +130,10 @@ fun DragWithSelectionBorder() {
 
                                 if (clickedBlockIndex != -1) {
                                     val clickedBlock = blocks.values.elementAt(clickedBlockIndex)
-                                    blocks.remove(clickedBlock.id)
+                                    // Показываем контекстное меню вместо немедленного удаления
+                                    selectedBlockForContextMenu = clickedBlock
+                                    contextMenuPosition = downChange.position
+                                    showContextMenu = true
                                 } else {
                                     createPosition = screenToWorld(downChange.position, camera, zoom)
                                     showCreateDialog = true
@@ -232,8 +245,12 @@ fun DragWithSelectionBorder() {
         }
     }
 
+    // Диалог создания блока
     if (showCreateDialog) {
         CreateBlockDialog(
+            initialWidth = 100f,
+            initialHeight = 100f,
+            initialColor = DefaultBlockColors[0],
             onConfirm = { width, height, color ->
                 val newBlock = Block(
                     position = createPosition,
@@ -246,20 +263,63 @@ fun DragWithSelectionBorder() {
             onCancel = { showCreateDialog = false }
         )
     }
+
+    // Диалог редактирования блока
+    if (showEditDialog && blockToEdit != null) {
+        CreateBlockDialog(
+            initialWidth = blockToEdit!!.size.width,
+            initialHeight = blockToEdit!!.size.height,
+            initialColor = blockToEdit!!.color,
+            onConfirm = { width, height, color ->
+                val updatedBlock = blockToEdit!!.copy(
+                    size = Size(width, height),
+                    color = color
+                )
+                blocks[updatedBlock.id] = updatedBlock
+                showEditDialog = false
+                blockToEdit = null
+            },
+            onCancel = {
+                showEditDialog = false
+                blockToEdit = null
+            }
+        )
+    }
+
+    // Контекстное меню
+    if (showContextMenu) {
+        ContextMenu(
+            position = contextMenuPosition,
+            onEdit = {
+                blockToEdit = selectedBlockForContextMenu
+                showEditDialog = true
+                showContextMenu = false
+            },
+            onDelete = {
+                selectedBlockForContextMenu?.let { block ->
+                    blocks.remove(block.id)
+                }
+                showContextMenu = false
+            }
+        )
+    }
 }
 
 @Composable
 fun CreateBlockDialog(
+    initialWidth: Float = 100f,
+    initialHeight: Float = 100f,
+    initialColor: Color = DefaultBlockColors[0],
     onConfirm: (Float, Float, Color) -> Unit,
     onCancel: () -> Unit
 ) {
-    var widthText by remember { mutableStateOf("100") }
-    var heightText by remember { mutableStateOf("100") }
-    var selectedColor by remember { mutableStateOf(DefaultBlockColors[0]) }
+    var widthText by remember { mutableStateOf(initialWidth.toString()) }
+    var heightText by remember { mutableStateOf(initialHeight.toString()) }
+    var selectedColor by remember { mutableStateOf(initialColor) }
 
     val width = widthText.toFloatOrNull() ?: 100f
     val height = heightText.toFloatOrNull() ?: 100f
-    val isValid = width in 10f..500f && height in 10f..500f
+    val isValid = width in 10f..5000f && height in 10f..5000f
 
     Dialog(onDismissRequest = onCancel) {
         Surface(
@@ -273,7 +333,7 @@ fun CreateBlockDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = "Создать новый блок",
+                    text = if (initialWidth == 100f) "Создать новый блок" else "Редактировать блок",
                     style = MaterialTheme.typography.titleMedium
                 )
 
@@ -282,10 +342,10 @@ fun CreateBlockDialog(
                     onValueChange = {
                         widthText = it.filter { char -> char.isDigit() || char == '.' }
                     },
-                    label = { Text("Ширина (10-500)") },
+                    label = { Text("Ширина (10-5000)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
-                    isError = width !in 10f..500f
+                    isError = width !in 10f..5000f
                 )
 
                 OutlinedTextField(
@@ -293,10 +353,10 @@ fun CreateBlockDialog(
                     onValueChange = {
                         heightText = it.filter { char -> char.isDigit() || char == '.' }
                     },
-                    label = { Text("Высота (10-500)") },
+                    label = { Text("Высота (10-5000)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
-                    isError = height !in 10f..500f
+                    isError = height !in 10f..5000f
                 )
 
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -329,9 +389,58 @@ fun CreateBlockDialog(
                         enabled = isValid,
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
                     ) {
-                        Text("Создать")
+                        Text(if (initialWidth == 100f) "Создать" else "Сохранить")
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun ContextMenu(
+    position: Offset,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .clickable {
+                // Закрыть меню при клике вне него
+                // Ничего не делаем, меню закроется само при закрытии диалога
+            }
+    ) {
+        Box(
+            modifier = Modifier
+                .graphicsLayer {
+            translationX = position.x
+            translationY = position.y
+        }
+                .background(Color.White)
+                .border(1.dp, Color.Gray, RoundedCornerShape(4.dp))
+                .padding(8.dp)
+                .width(150.dp)
+                .height(60.dp)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    "Редактировать",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onEdit() }
+                        .padding(8.dp)
+                )
+                Text(
+                    "Удалить",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onDelete() }
+                        .padding(8.dp)
+                )
             }
         }
     }
