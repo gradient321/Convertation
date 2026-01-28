@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
@@ -286,7 +287,7 @@ fun DragWithSelectionBorder() {
         )
     }
 
-    // Контекстное меню
+    // Контекстное меню (увеличенное по высоте)
     if (showContextMenu) {
         ContextMenu(
             position = contextMenuPosition,
@@ -299,6 +300,17 @@ fun DragWithSelectionBorder() {
                 selectedBlockForContextMenu?.let { block ->
                     blocks.remove(block.id)
                 }
+                showContextMenu = false
+            },
+            onChangeColor = {
+                // Логика изменения цвета (можно добавить диалог выбора цвета)
+                showContextMenu = false
+            },
+            onCopy = {
+                // Логика копирования блока
+                showContextMenu = false
+            },
+            onClose = {
                 showContextMenu = false
             }
         )
@@ -401,45 +413,73 @@ fun CreateBlockDialog(
 fun ContextMenu(
     position: Offset,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onChangeColor: () -> Unit,
+    onCopy: () -> Unit,
+    onClose: () -> Unit
 ) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .clickable {
-                // Закрыть меню при клике вне него
-                // Ничего не делаем, меню закроется само при закрытии диалога
-            }
+            .clickable { onClose() }  // Закрыть меню при клике вне его
     ) {
+        // Крестик для закрытия меню
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(4.dp)
+                .clickable { onClose() }
+        ) {
+            Text("×", fontSize = 16.sp, color = Color.Gray)
+        }
+
         Box(
             modifier = Modifier
                 .graphicsLayer {
-            translationX = position.x
-            translationY = position.y
-        }
+                    translationX = position.x
+                    translationY = position.y
+                }
                 .background(Color.White)
                 .border(1.dp, Color.Gray, RoundedCornerShape(4.dp))
                 .padding(8.dp)
-                .width(150.dp)
-                .height(60.dp)
+                .width(180.dp)
+                .height(120.dp)
         ) {
             Column(
                 modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
                     "Редактировать",
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onEdit() }
-                        .padding(8.dp)
+                        .padding(16.dp)
+                        .background(Color.White, RoundedCornerShape(4.dp))
                 )
                 Text(
                     "Удалить",
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onDelete() }
-                        .padding(8.dp)
+                        .padding(16.dp)
+                        .background(Color.White, RoundedCornerShape(4.dp))
+                )
+                Text(
+                    "Изменить цвет",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onChangeColor() }
+                        .padding(16.dp)
+                        .background(Color.White, RoundedCornerShape(4.dp))
+                )
+                Text(
+                    "Копировать",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onCopy() }
+                        .padding(16.dp)
+                        .background(Color.White, RoundedCornerShape(4.dp))
                 )
             }
         }
