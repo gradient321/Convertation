@@ -1,6 +1,5 @@
 package org.example.project
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -16,22 +15,20 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.*
-import androidx.compose.ui.text.TextMeasurer
-import androidx.compose.ui.text.TextLayoutResult
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.IntOffset
 import java.util.*
+import kotlin.math.roundToInt
 
 // Определение классов элементов
 abstract class Element
@@ -90,6 +87,42 @@ private data class PanState(
     val startPosition: Offset
 )
 
+@Composable
+fun BlockComponent(
+    position: Offset,
+    size: Size,
+    color: Color,
+    isSelected: Boolean,
+    content: Element?
+) {
+    Box(
+        modifier = Modifier
+            .offset { IntOffset(position.x.roundToInt(), position.y.roundToInt()) }
+            .size(size.width.dp, size.height.dp)
+            .background(color)
+            .border(
+                width = if (isSelected) BorderWidth.dp else 0.dp,
+                color = SelectionBorderColor,
+                shape = RoundedCornerShape(0.dp)
+            )
+    ) {
+        if (content != null) {
+            val text = when (content) {
+                is TextElement -> content.text
+                is IntElement -> content.int.toString()
+                is DoubleElement -> content.double.toString()
+                is ChoiceElement -> content.text
+                else -> "Unknown element"
+            }
+            Text(
+                text = text,
+                modifier = Modifier.padding(5.dp),
+                style = TextStyle(color = Color.Black, fontSize = 16.sp)
+            )
+        }
+    }
+}
+
 fun main() = application {
     Window(
         onCloseRequest = { exitApplication() },
@@ -126,7 +159,7 @@ fun DragWithSelectionBorder() {
     var dragState by remember { mutableStateOf<DragState?>(null) }
     var panState by remember { mutableStateOf<PanState?>(null) }
 
-    Canvas(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(BackgroundColor)
@@ -273,10 +306,17 @@ fun DragWithSelectionBorder() {
                 }
             }
     ) {
-        blocks.values.forEach c@{ block ->
+        blocks.values.forEach { block ->
             val screenPos = worldToScreen(block.position, camera, zoom)
             val screenSize = block.size * zoom
-            drawBlock(screenPos, block.color, screenSize, block.id == selectedBlockId, block.content)
+
+            BlockComponent(
+                position = screenPos,
+                size = screenSize,
+                color = block.color,
+                isSelected = block.id == selectedBlockId,
+                content = block.content
+            )
         }
     }
 
@@ -367,7 +407,12 @@ fun CreateBlockDialog(
     var widthText by remember { mutableStateOf(initialWidth.toString()) }
     var heightText by remember { mutableStateOf(initialHeight.toString()) }
     var selectedColor by remember { mutableStateOf(initialColor) }
+
+    // Создаем список доступных типов элементов
+    val elementTypes = listOf("TextElement", "IntElement", "DoubleElement", "ChoiceElement")
     var elementType by remember { mutableStateOf("TextElement") }
+    var expanded by remember { mutableStateOf(false) }
+
     var textContent by remember { mutableStateOf("") }
     var intContent by remember { mutableStateOf("0") }
     var doubleContent by remember { mutableStateOf("0.0") }
@@ -401,6 +446,40 @@ fun CreateBlockDialog(
     val width = widthText.toFloatOrNull() ?: 100f
     val height = heightText.toFloatOrNull() ?: 100f
     val isValid = width in 10f..5000f && height in 10f..5000f
+
+    // Добавляем логику обновления содержимого при изменении типа элемента
+    if (remember { mutableStateOf(elementType) }.value != elementType) {
+        when (elementType) {
+            "TextElement" -> {
+                textContent = ""
+                intContent = "0"
+                doubleContent = "0.0"
+                choicesContent = ""
+                isOnlyChoices = false
+            }
+            "IntElement" -> {
+                textContent = ""
+                intContent = "0"
+                doubleContent = "0.0"
+                choicesContent = ""
+                isOnlyChoices = false
+            }
+            "DoubleElement" -> {
+                textContent = ""
+                intContent = "0"
+                doubleContent = "0.0"
+                choicesContent = ""
+                isOnlyChoices = false
+            }
+            "ChoiceElement" -> {
+                textContent = ""
+                intContent = "0"
+                doubleContent = "0.0"
+                choicesContent = ""
+                isOnlyChoices = false
+            }
+        }
+    }
 
     val content: Element? = when (elementType) {
         "TextElement" -> TextElement(textContent)
@@ -452,13 +531,34 @@ fun CreateBlockDialog(
                     isError = height !in 10f..5000f
                 )
 
-                // Выбор типа элемента
+                // Выбор типа элемента через выпадающее меню
                 OutlinedTextField(
                     value = elementType,
-                    onValueChange = { elementType = it },
+                    onValueChange = {},
                     label = { Text("Тип элемента") },
-                    singleLine = true
+                    readOnly = true,
+                    trailingIcon = {
+                        Text("↓", modifier = Modifier.padding(end = 8.dp))
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { expanded = true }
                 )
+
+                DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    elementTypes.forEach { type ->
+                        DropdownMenuItem(
+                            text = { Text(type) },
+                            onClick = {
+                                elementType = type
+                                expanded = false
+                            }
+                        )
+                    }
+                }
 
                 // В зависимости от типа элемента отображаем соответствующие поля
                 when (elementType) {
@@ -663,41 +763,4 @@ private fun isInside(point: Offset, rectTopLeft: Offset, size: Size): Boolean {
             point.x <= rectTopLeft.x + size.width &&
             point.y >= rectTopLeft.y &&
             point.y <= rectTopLeft.y + size.height
-}
-@Composable
-private fun DrawScope.drawBlock(topLeft: Offset, color: Color, size: Size, isSelected: Boolean, content: Element?) {
-    drawRect(color = color, topLeft = topLeft, size = size)
-    if (isSelected) {
-        drawRect(
-            color = SelectionBorderColor,
-            topLeft = topLeft,
-            size = size,
-            style = Stroke(width = BorderWidth)
-        )
-    }
-
-    // Отрисовка содержимого элемента
-    if (content != null) {
-        val text = when (content) {
-            is TextElement -> content.text
-            is IntElement -> content.int.toString()
-            is DoubleElement -> content.double.toString()
-            is ChoiceElement -> content.text
-            else -> "Unknown element"
-        }
-
-        val textMeasurer = rememberTextMeasurer()
-        val textLayoutResult = textMeasurer.measure(
-            text = text,
-            style = TextStyle(
-                color = Color.Black,
-                fontSize = 16.sp
-            )
-        )
-
-        drawText(
-            textLayoutResult = textLayoutResult,
-            topLeft = topLeft + Offset(5f, 5f)
-        )
-    }
 }
