@@ -17,7 +17,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.KeyboardType
@@ -338,11 +337,9 @@ fun DragWithSelectionBorder() {
                 showContextMenu = false
             },
             onChangeColor = {
-                // Логика изменения цвета (можно добавить диалог выбора цвета)
                 showContextMenu = false
             },
             onCopy = {
-                // Логика копирования блока
                 showContextMenu = false
             },
             onClose = {
@@ -391,137 +388,75 @@ fun CreateBlockDialog(
     var doubleLimitContent by remember { mutableStateOf("0.0") }
     var limitRanges by remember { mutableStateOf("") }
 
-    // Устанавливаем начальные значения для элемента
-    when (initialContent) {
-        is TextElement -> {
-            elementType = "TextElement"
-            textContent = initialContent.text
+    // 👇 ИНИЦИАЛИЗИРУЕМ ПОЛЯ ТОЛЬКО ОДИН РАЗ при открытии диалога
+    LaunchedEffect(Unit) {
+        when (initialContent) {
+            is TextElement -> {
+                elementType = "TextElement"
+                textContent = initialContent.text
+            }
+            is IntElement -> {
+                elementType = "IntElement"
+                intContent = initialContent.int.toString()
+            }
+            is DoubleElement -> {
+                elementType = "DoubleElement"
+                doubleContent = initialContent.double.toString()
+            }
+            is ChoiceElement -> {
+                elementType = "ChoiceElement"
+                choicesContent = initialContent.text
+                isOnlyChoices = initialContent.isOnlyChoices
+            }
+            is Block_ -> {
+                elementType = "Block_"
+                textContent = initialContent.text
+            }
+            is BlockUnderText -> {
+                elementType = "BlockUnderText"
+                textContent = initialContent.text
+            }
+            is IntLimitElement -> {
+                elementType = "IntLimitElement"
+                intLimitContent = initialContent.int.toString()
+                limitRanges = initialContent.limit.joinToString(", ") { "[${it.start}..${it.endInclusive}]" }
+            }
+            is DoubleLimitElement -> {
+                elementType = "DoubleLimitElement"
+                doubleLimitContent = initialContent.double.toString()
+                limitRanges = initialContent.limit.joinToString(", ") { "[${it.from}..${it.to}]" }
+            }
+            else -> {
+                elementType = "TextElement"
+                textContent = ""
+            }
         }
-        is IntElement -> {
-            elementType = "IntElement"
-            intContent = initialContent.int.toString()
-        }
-        is DoubleElement -> {
-            elementType = "DoubleElement"
-            doubleContent = initialContent.double.toString()
-        }
-        is ChoiceElement -> {
-            elementType = "ChoiceElement"
-            choicesContent = initialContent.text
-            isOnlyChoices = initialContent.isOnlyChoices
-        }
-        is Block_ -> {
-            elementType = "Block_"
-            textContent = initialContent.text
-        }
-        is BlockUnderText -> {
-            elementType = "BlockUnderText"
-            textContent = initialContent.text
-        }
-        is IntLimitElement -> {
-            elementType = "IntLimitElement"
-            intLimitContent = initialContent.int.toString()
-            limitRanges = initialContent.limit.joinToString(", ") { "[${it.start}..${it.endInclusive}]" }
-        }
-        is DoubleLimitElement -> {
-            elementType = "DoubleLimitElement"
-            doubleLimitContent = initialContent.double.toString()
-            limitRanges = initialContent.limit.joinToString(", ") { "[${it.from}..${it.to}]" }
-        }
-        else -> {
-            elementType = "TextElement"
+    }
+
+    // 👇 Сбрасываем поля при смене типа элемента
+    LaunchedEffect(elementType) {
+        when (elementType) {
+            "TextElement", "Block_", "BlockUnderText" -> textContent = ""
+            "IntElement" -> intContent = "0"
+            "DoubleElement" -> doubleContent = "0.0"
+            "ChoiceElement" -> {
+                choicesContent = ""
+                isOnlyChoices = false
+            }
+            "IntLimitElement" -> {
+                intLimitContent = "0"
+                limitRanges = ""
+            }
+            "DoubleLimitElement" -> {
+                doubleLimitContent = "0.0"
+                limitRanges = ""
+            }
         }
     }
 
     val width = widthText.toFloatOrNull() ?: 100f
     val height = heightText.toFloatOrNull() ?: 100f
     val isValid = width in 10f..5000f && height in 10f..5000f
-
-    // Обновляем содержимое при изменении типа элемента
-    LaunchedEffect(elementType) {
-        when (elementType) {
-            "TextElement" -> {
-                textContent = ""
-                intContent = "0"
-                doubleContent = "0.0"
-                choicesContent = ""
-                isOnlyChoices = false
-                intLimitContent = "0"
-                doubleLimitContent = "0.0"
-                limitRanges = ""
-            }
-            "IntElement" -> {
-                textContent = ""
-                intContent = "0"
-                doubleContent = "0.0"
-                choicesContent = ""
-                isOnlyChoices = false
-                intLimitContent = "0"
-                doubleLimitContent = "0.0"
-                limitRanges = ""
-            }
-            "DoubleElement" -> {
-                textContent = ""
-                intContent = "0"
-                doubleContent = "0.0"
-                choicesContent = ""
-                isOnlyChoices = false
-                intLimitContent = "0"
-                doubleLimitContent = "0.0"
-                limitRanges = ""
-            }
-            "ChoiceElement" -> {
-                textContent = ""
-                intContent = "0"
-                doubleContent = "0.0"
-                choicesContent = ""
-                isOnlyChoices = false
-                intLimitContent = "0"
-                doubleLimitContent = "0.0"
-                limitRanges = ""
-            }
-            "Block_" -> {
-                textContent = ""
-                intContent = "0"
-                doubleContent = "0.0"
-                choicesContent = ""
-                isOnlyChoices = false
-                intLimitContent = "0"
-                doubleLimitContent = "0.0"
-                limitRanges = ""
-            }
-            "BlockUnderText" -> {
-                textContent = ""
-                intContent = "0"
-                doubleContent = "0.0"
-                choicesContent = ""
-                isOnlyChoices = false
-                intLimitContent = "0"
-                doubleLimitContent = "0.0"
-                limitRanges = ""
-            }
-            "IntLimitElement" -> {
-                textContent = ""
-                intContent = "0"
-                doubleContent = "0.0"
-                choicesContent = ""
-                isOnlyChoices = false
-                intLimitContent = "0"
-                doubleLimitContent = "0.0"
-                limitRanges = ""
-            }
-            "DoubleLimitElement" -> {
-                textContent = ""
-                intContent = "0"
-                doubleContent = "0.0"
-                choicesContent = ""
-                isOnlyChoices = false
-                intLimitContent = "0"
-                doubleLimitContent = "0.0"
-                limitRanges = ""
-            }
-        }
-    }
 
     val content: Element? = when (elementType) {
         "TextElement" -> TextElement(textContent)
@@ -594,12 +529,6 @@ fun CreateBlockDialog(
                     style = MaterialTheme.typography.titleMedium
                 )
 
-                // Отладочная информация
-                Text(
-                    text = "Current element type: $elementType",
-                    style = MaterialTheme.typography.bodySmall
-                )
-
                 OutlinedTextField(
                     value = widthText,
                     onValueChange = {
@@ -642,7 +571,6 @@ fun CreateBlockDialog(
                         onDismissRequest = { expanded = false },
                         modifier = Modifier
                             .width(200.dp)
-                            .align(Alignment.TopStart)
                             .offset(y = 32.dp)
                     ) {
                         elementTypes.forEach { type ->
@@ -746,9 +674,6 @@ fun CreateBlockDialog(
                             label = { Text("Ограничения (формат: [0.0..100.0], [200.0..300.0])") },
                             singleLine = true
                         )
-                    }
-                    else -> {
-                        // Ничего не отображаем для неизвестных типов
                     }
                 }
 

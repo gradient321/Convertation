@@ -26,7 +26,7 @@ open class IntElement(
 
 open class DoubleElement(
     var double: Double = 0.0
-): NumberElement() {
+) : NumberElement() {
     override var number: Number
         get() = double
         set(value) { double = value.toDouble() }
@@ -41,7 +41,7 @@ open class ChoiceElement(
 open class Block_(
     var text: String = "",
     var elements: Map<String, Element> = mapOf()
-): Element()
+) : Element()
 
 open class BlockUnderText(text: String = "", elements: Map<String, Element> = mapOf()) : Block_(text, elements)
 
@@ -58,11 +58,11 @@ open class DoubleLimitElement(
 enum class Side { TOP, BOTTOM, LEFT, RIGHT, CENTER, CORNER }
 
 data class ConnectionPoint(
-    val type: ConnectionType, // Блок или координата
-    val blockId: String? = null, // Для блоков
-    val side: Side? = null, // Сторона блока (для блоков)
-    val offset: Double = 0.0, // Смещение от центра стороны (-0.5..0.5)
-    val x: Double? = null, // Для координат
+    val type: ConnectionType,
+    val blockId: String? = null,
+    val side: Side? = null,
+    val offset: Double = 0.0,
+    val x: Double? = null,
     val y: Double? = null
 )
 
@@ -72,7 +72,7 @@ data class ArrowElement(
     val source: ConnectionPoint,
     val target: ConnectionPoint,
     val style: ArrowStyle,
-    val path: PathData // Гибкое описание пути
+    val path: PathData
 )
 
 data class PathData(
@@ -81,15 +81,15 @@ data class PathData(
 )
 
 enum class PathType {
-    DIRECT, // Прямая
-    QUADRATIC_BEZIER, // Квадратичная кривая
-    CUBIC_BEZIER, // Кубическая кривая
-    POLYLINE, // Ломаная
-    CUSTOM_SVG // Любой SVG path
+    DIRECT,
+    QUADRATIC_BEZIER,
+    CUBIC_BEZIER,
+    POLYLINE,
+    CUSTOM_SVG
 }
 
 data class ArrowStyle(
-    val color: Color = Color(0, 0, 0),
+    val color: Color = Color.Black,
     val thickness: Double = 2.0,
     val lineStyle: LineStyle = LineStyle.SOLID,
     val startTip: TipStyle = TipStyle(TipType.TRIANGLE),
