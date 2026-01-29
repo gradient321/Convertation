@@ -31,7 +31,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.IntOffset
 import java.util.*
 import kotlin.math.roundToInt
-import org.example.project.*
 
 // Константы для цветов и стилей
 val BackgroundColor = Color(0xFF1E1E1E)
@@ -112,7 +111,7 @@ fun BlockComponent(
 fun main() = application {
     Window(
         onCloseRequest = { exitApplication() },
-        title = "APP KT - Редактор блоков (Исправленное перемещение)"
+        title = "APP KT - Редактор блоков (Масштабирование колесом)"
     ) {
         Box(
             modifier = Modifier
@@ -158,27 +157,17 @@ fun DragWithSelectionBorder() {
                 val delta = event.changes.firstOrNull()?.scrollDelta?.y ?: return@onPointerEvent
                 if (delta == 0f) return@onPointerEvent
 
-                // Проверяем, зажата ли клавиша Ctrl
-                if (event.changes.first().modifiers.isCtrlPressed) {
-                    val mousePos = event.changes.first().position
-                    val worldBefore = screenToWorld(mousePos, camera, zoom)
-                    zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.2f, 5f)
-                    val worldAfter = screenToWorld(mousePos, camera, zoom)
-                    camera += (worldBefore - worldAfter)
-                } else {
-                    // Просто прокручиваем область блоков
-                    camera += Offset(0f, delta * 10f)
-                }
+                // Масштабируем при прокрутке колеса мыши
+                val mousePos = event.changes.first().position
+                val worldBefore = screenToWorld(mousePos, camera, zoom)
+                zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.2f, 5f)
+                val worldAfter = screenToWorld(mousePos, camera, zoom)
+                camera += (worldBefore - worldAfter)
             }
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                     while (true) {
                         val event = awaitPointerEvent()
-
-                        // Обработка колеса мыши (уже обработано выше)
-                        if (event.type == PointerEventType.Scroll) {
-                            continue
-                        }
 
                         val downChange = event.changes.find { it.pressed && !it.isConsumed }
                         if (downChange != null) {
@@ -228,31 +217,6 @@ fun DragWithSelectionBorder() {
                                     while (true) {
                                         val moveEvent = awaitPointerEvent()
 
-                                        if (moveEvent.type == PointerEventType.Scroll) {
-                                            val scrollChange = moveEvent.changes.firstOrNull()
-                                            if (scrollChange != null) {
-                                                val delta = scrollChange.scrollDelta.y
-                                                if (delta != 0f) {
-                                                    val mousePos = scrollChange.position
-                                                    val worldBefore = screenToWorld(mousePos, camera, zoom)
-                                                    zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.2f, 5f)
-                                                    val worldAfter = screenToWorld(mousePos, camera, zoom)
-                                                    camera += (worldBefore - worldAfter)
-
-                                                    // Обновляем позицию блока при изменении масштаба
-                                                    if (dragState != null) {
-                                                        val cursorWorldPos = screenToWorld(mousePos, camera, zoom)
-                                                        val newPosition = cursorWorldPos - dragState!!.offset
-                                                        val currentBlock = blocks[selectedBlockId!!]
-                                                        if (currentBlock != null) {
-                                                            blocks[selectedBlockId!!] = currentBlock.copy(position = newPosition)
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            continue
-                                        }
-
                                         val moveChange = moveEvent.changes.find { it.id == downChange.id }
                                         if (moveChange == null || !moveChange.pressed) break
 
@@ -281,10 +245,6 @@ fun DragWithSelectionBorder() {
 
                                     while (true) {
                                         val moveEvent = awaitPointerEvent()
-
-                                        if (moveEvent.type == PointerEventType.Scroll) {
-                                            continue
-                                        }
 
                                         val moveChange = moveEvent.changes.find { it.id == downChange.id }
                                         if (moveChange == null || !moveChange.pressed) break
@@ -421,6 +381,7 @@ fun CreateBlockDialog(
     var elementType by remember { mutableStateOf("TextElement") }
     var expanded by remember { mutableStateOf(false) }
 
+    // Добавляем remember для каждого типа контента
     var textContent by remember { mutableStateOf("") }
     var intContent by remember { mutableStateOf("0") }
     var doubleContent by remember { mutableStateOf("0.0") }
@@ -633,6 +594,12 @@ fun CreateBlockDialog(
                     style = MaterialTheme.typography.titleMedium
                 )
 
+                // Отладочная информация
+                Text(
+                    text = "Current element type: $elementType",
+                    style = MaterialTheme.typography.bodySmall
+                )
+
                 OutlinedTextField(
                     value = widthText,
                     onValueChange = {
@@ -684,7 +651,8 @@ fun CreateBlockDialog(
                                 onClick = {
                                     elementType = type
                                     expanded = false
-                                }
+                                },
+                                modifier = Modifier.clickable {}
                             )
                         }
                     }
