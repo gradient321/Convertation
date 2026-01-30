@@ -425,10 +425,9 @@
 
 
 
-//package org.example.project
-//
-//import androidx.compose.ui.window.application
-//
-//fun main() = application {
-//    MainWindow(onCloseRequest = ::exitApplication)
-//}
+package org.example.project
+
+import androidx.compose.ui.window.application
+
+fun main() = application {
+}

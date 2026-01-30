@@ -31,26 +31,82 @@ import androidx.compose.ui.window.application
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
-import java.util.*
-import kotlin.math.min
-import kotlin.math.roundToInt
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import java.util.UUID
+import kotlin.math.*
 
-// Константы для цветов и стилей
+// ===== ВСЕ ЭЛЕМЕНТЫ ВНУТРИ ОДНОГО ФАЙЛА =====
+
+class Data
+
+abstract class Element {
+    var data: Data? = null
+}
+
+open class TextElement(var text: String = "") : Element()
+
+abstract class NumberElement : Element() {
+    open var number: Number = 0.0
+}
+
+open class IntElement(var int: Int = 0) : NumberElement() {
+    override var number: Number
+        get() = int
+        set(value) { int = value.toInt() }
+}
+
+open class DoubleElement(var double: Double = 0.0) : NumberElement() {
+    override var number: Number
+        get() = double
+        set(value) { double = value.toDouble() }
+}
+
+open class ChoiceElement(
+    var text: String = "",
+    var choices: List<String> = listOf(),
+    var isOnlyChoices: Boolean = false
+) : Element()
+
+open class Block_(var text: String = "", var elements: Map<String, Element> = mapOf()) : Element()
+open class BlockUnderText(text: String = "", elements: Map<String, Element> = mapOf()) : Block_(text, elements)
+
+open class IntLimitElement(
+    int: Int = 0,
+    var limit: List<IntRange> = listOf(Int.MIN_VALUE..Int.MAX_VALUE)
+) : IntElement(int)
+
+data class DoubleRange(val from: Double, val to: Double)
+fun Double.rangeTo(to: Double): DoubleRange = DoubleRange(this, to)
+
+open class DoubleLimitElement(
+    double: Double = 0.0,
+    var limit: List<DoubleRange> = listOf(DoubleRange(Double.MIN_VALUE, Double.MAX_VALUE))
+) : DoubleElement(double)
+
+// ===== СТРЕЛКИ =====
+data class ArrowStyle(
+    val color: Color = Color(0xFF42A5F5),
+    val thickness: Float = 2.5f,
+    val arrowheadSize: Float = 12f  // Размер наконечника
+)
+
+data class ArrowElement(
+    val id: String = UUID.randomUUID().toString(),
+    val sourceBlockId: String,
+    val targetBlockId: String,
+    val style: ArrowStyle = ArrowStyle()
+)
+
+// ===== ОСНОВНОЙ РЕДАКТОР =====
 val BackgroundColor = Color(0xFF1E1E1E)
 val DefaultBlockColors = listOf(
-    Color(0xFF4A148C),  // Фиолетовый
-    Color(0xFF0288D1),  // Синий
-    Color(0xFF2E7D32),  // Зелёный
-    Color(0xFFC62828),  // Красный
-    Color(0xFF5D4037),  // Коричневый
-    Color(0xFF6A1B9A),  // Тёмно-фиолетовый
-    Color(0xFFFFA000),  // Оранжевый
-    Color(0xFF37474F)   // Серый
+    Color(0xFF4A148C), Color(0xFF0288D1), Color(0xFF2E7D32), Color(0xFFC62828),
+    Color(0xFF5D4037), Color(0xFF6A1B9A), Color(0xFFFFA000), Color(0xFF37474F)
 )
 val SelectionBorderColor = Color.White
 const val BorderWidth = 2f
 
-// Модель блока
 data class Block(
     val id: String = UUID.randomUUID().toString(),
     val position: Offset = Offset.Zero,
@@ -60,25 +116,18 @@ data class Block(
     val content: Element? = null
 )
 
-// Состояние перетаскивания
-private data class DragState(
-    val offset: Offset // Смещение между курсором и блоком
-)
-
-// Состояние панорамирования камеры
-private data class PanState(
-    val initialCamera: Offset,
-    val startPosition: Offset
-)
+private data class DragState(val offset: Offset)
+private data class PanState(val initialCamera: Offset, val startPosition: Offset)
+private data class ConnectionMode(val sourceBlockId: String)
 
 @Composable
 fun BlockComponent(
     position: Offset,
-    size: Size,  // Экранный размер блока (уже с учётом зума)
+    size: Size,
     color: Color,
     isSelected: Boolean,
     content: Element?,
-    zoom: Float  // Передаём зум для адаптивного масштабирования
+    zoom: Float
 ) {
     Box(
         modifier = Modifier
@@ -88,7 +137,7 @@ fun BlockComponent(
             .border(
                 width = if (isSelected) BorderWidth.dp else 0.dp,
                 color = SelectionBorderColor,
-                shape = RoundedCornerShape(0.dp)
+                shape = RoundedCornerShape(4.dp)  // Скруглённые углы для блоков
             )
     ) {
         if (content != null) {
@@ -104,14 +153,7 @@ fun BlockComponent(
                 else -> "Unknown"
             }
 
-            // 🔑 УМНОЕ МАСШТАБИРОВАНИЕ С ПЕРЕНОСОМ СТРОК:
-            // 1. Базовый размер шрифта = 30% от высоты блока
-            // 2. Автоматически уменьшаем шрифт, если текст не помещается в 1 строку
-            // 3. Минимум 6.sp для читаемости при сильном отдалении
-
-            // Рассчитываем базовый размер шрифта (30% от высоты блока)
             val baseFontSizePx = size.height * 0.3f
-            // Ограничиваем минимальный размер для читаемости
             val minFontSizePx = 6f
             val fontSizePx = baseFontSizePx.coerceAtLeast(minFontSizePx)
             val fontSize = fontSizePx.sp
@@ -120,30 +162,66 @@ fun BlockComponent(
                 text = text,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(2.dp),
+                    .padding(4.dp),  // Больше отступов для текста
                 style = TextStyle(
                     color = Color.Black,
                     fontSize = fontSize,
-                    lineHeight = fontSize * 1.1f  // Небольшой интерлиньяж для читаемости
+                    lineHeight = fontSize * 1.2f
                 ),
-                maxLines = 4,  // Разрешаем до 4 строк для длинного текста
+                maxLines = 4,
                 overflow = TextOverflow.Ellipsis,
-                softWrap = true,  // 🔑 ВКЛЮЧЕН ПЕРЕНОС СТРОК!
-                textAlign = TextAlign.Center  // Центрируем текст по горизонтали
+                softWrap = true,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+@Composable
+fun ArrowComponent(start: Offset, end: Offset, style: ArrowStyle, zoom: Float) {
+    Canvas(modifier = Modifier.fillMaxSize().graphicsLayer { alpha = 0.98f }) {
+        // Основная линия стрелки
+        drawLine(
+            color = style.color,
+            start = start,
+            end = end,
+            strokeWidth = style.thickness * zoom.coerceAtLeast(0.6f),
+            cap = StrokeCap.Round
+        )
+
+        // Наконечник стрелки (треугольник) - только если достаточно близко для видимости
+        if (zoom > 0.4f) {
+            val arrowheadSize = style.arrowheadSize * zoom.coerceAtMost(1.5f)
+            val angle = atan2(end.y - start.y, end.x - start.x)
+            val arrowSideAngle = PI / 6  // 30 градусов
+
+            // Точки треугольника наконечника
+            val p1 = Offset(
+                end.x - arrowheadSize * cos(angle - arrowSideAngle).toFloat(),
+                end.y - arrowheadSize * sin(angle - arrowSideAngle).toFloat()
+            )
+            val p2 = Offset(
+                end.x - arrowheadSize * cos(angle + arrowSideAngle).toFloat(),
+                end.y - arrowheadSize * sin(angle + arrowSideAngle).toFloat()
+            )
+
+            // Рисуем закрашенный треугольник
+            drawPath(
+                path = Path().apply {
+                    moveTo(end.x, end.y)
+                    lineTo(p1.x, p1.y)
+                    lineTo(p2.x, p2.y)
+                    close()
+                },
+                color = style.color
             )
         }
     }
 }
 
 fun main() = application {
-    Window(
-        onCloseRequest = { exitApplication() },
-        title = "APP KT - Редактор блоков (Адаптивный текст)"
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-        ) {
+    Window(onCloseRequest = { exitApplication() }, title = "APP KT - Редактор блоков с соединениями") {
+        Box(modifier = Modifier.fillMaxSize()) {
             DragWithSelectionBorder()
         }
     }
@@ -153,38 +231,35 @@ fun main() = application {
 @Composable
 fun DragWithSelectionBorder() {
     val blocks = remember { mutableStateMapOf<String, Block>() }
+    val arrows = remember { mutableStateListOf<ArrowElement>() }
     var camera by remember { mutableStateOf(Offset.Zero) }
     var zoom by remember { mutableStateOf(1f) }
     var selectedBlockId by remember { mutableStateOf<String?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var createPosition by remember { mutableStateOf(Offset.Zero) }
-
-    // Состояния для контекстного меню
+    var connectionMode by remember { mutableStateOf<ConnectionMode?>(null) }
     var showContextMenu by remember { mutableStateOf(false) }
     var contextMenuPosition by remember { mutableStateOf(Offset.Zero) }
     var selectedBlockForContextMenu by remember { mutableStateOf<Block?>(null) }
-
-    // Состояния для редактирования блока
     var showEditDialog by remember { mutableStateOf(false) }
     var blockToEdit by remember { mutableStateOf<Block?>(null) }
-
     var dragState by remember { mutableStateOf<DragState?>(null) }
     var panState by remember { mutableStateOf<PanState?>(null) }
+    var cursorPosition by remember { mutableStateOf(Offset.Zero) }
+
+    // Для разъединения блоков
+    var showDisconnectDialog by remember { mutableStateOf(false) }
+    var blockToDisconnect by remember { mutableStateOf<Block?>(null) }
+    var connectionsToDisconnect by remember { mutableStateOf<List<ArrowElement>>(emptyList()) }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(BackgroundColor)
             .onPointerEvent(PointerEventType.Scroll) { event ->
-                // Не обрабатываем колесо мыши, если диалоги открыты
-                if (showCreateDialog || showEditDialog || showContextMenu) {
-                    return@onPointerEvent
-                }
-
+                if (showCreateDialog || showEditDialog || showContextMenu || showDisconnectDialog) return@onPointerEvent
                 val delta = event.changes.firstOrNull()?.scrollDelta?.y ?: return@onPointerEvent
                 if (delta == 0f) return@onPointerEvent
-
-                // Масштабируем при прокрутке колеса мыши
                 val mousePos = event.changes.first().position
                 val worldBefore = screenToWorld(mousePos, camera, zoom)
                 zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.2f, 5f)
@@ -195,6 +270,7 @@ fun DragWithSelectionBorder() {
                 awaitPointerEventScope {
                     while (true) {
                         val event = awaitPointerEvent()
+                        event.changes.firstOrNull()?.let { cursorPosition = it.position }
 
                         val downChange = event.changes.find { it.pressed && !it.isConsumed }
                         if (downChange != null) {
@@ -210,12 +286,11 @@ fun DragWithSelectionBorder() {
                                 }
 
                                 if (clickedBlockIndex != -1) {
-                                    val clickedBlock = blocks.values.elementAt(clickedBlockIndex)
-                                    // Показываем контекстное меню вместо немедленного удаления
-                                    selectedBlockForContextMenu = clickedBlock
+                                    selectedBlockForContextMenu = blocks.values.elementAt(clickedBlockIndex)
                                     contextMenuPosition = downChange.position
                                     showContextMenu = true
                                 } else {
+                                    connectionMode = null
                                     createPosition = screenToWorld(downChange.position, camera, zoom)
                                     showCreateDialog = true
                                 }
@@ -229,57 +304,59 @@ fun DragWithSelectionBorder() {
                                     isInside(downChange.position, screenPos, screenSize)
                                 }
 
+                                if (connectionMode != null && clickedBlockIndex != -1) {
+                                    val targetBlock = blocks.values.elementAt(clickedBlockIndex)
+                                    val sourceId = connectionMode!!.sourceBlockId
+
+                                    if (sourceId != targetBlock.id && !arrows.any {
+                                            it.sourceBlockId == sourceId && it.targetBlockId == targetBlock.id
+                                        }) {
+                                        arrows.add(
+                                            ArrowElement(
+                                                sourceBlockId = sourceId,
+                                                targetBlockId = targetBlock.id,
+                                                style = ArrowStyle(
+                                                    color = Color(0xFF42A5F5),
+                                                    thickness = 2.5f,
+                                                    arrowheadSize = 12f
+                                                )
+                                            )
+                                        )
+                                    }
+                                    connectionMode = null
+                                    downChange.consume()
+                                    continue
+                                }
+
                                 if (clickedBlockIndex != -1) {
-                                    // Выделяем только один блок
                                     val clickedBlock = blocks.values.elementAt(clickedBlockIndex)
                                     selectedBlockId = clickedBlock.id
-
-                                    // Начало перетаскивания: вычисляем смещение между курсором и блоком
                                     val cursorWorldPos = screenToWorld(downChange.position, camera, zoom)
                                     val offset = cursorWorldPos - clickedBlock.position
-
                                     dragState = DragState(offset)
                                     downChange.consume()
 
                                     while (true) {
                                         val moveEvent = awaitPointerEvent()
-
                                         val moveChange = moveEvent.changes.find { it.id == downChange.id }
                                         if (moveChange == null || !moveChange.pressed) break
-
-                                        // Получаем текущую мировую позицию курсора
                                         val cursorWorldPos = screenToWorld(moveChange.position, camera, zoom)
-                                        // Вычисляем новую позицию блока: курсор - смещение
                                         val newPosition = cursorWorldPos - dragState!!.offset
-
-                                        val currentBlock = blocks[selectedBlockId!!]
-                                        if (currentBlock != null) {
-                                            blocks[selectedBlockId!!] = currentBlock.copy(position = newPosition)
-                                        }
-
+                                        blocks[selectedBlockId!!] = blocks.getValue(selectedBlockId!!).copy(position = newPosition)
                                         moveChange.consume()
                                     }
                                     dragState = null
                                 } else {
-                                    // Клик на пустое место: сбросить выделение
                                     selectedBlockId = null
-                                    // Начать панорамирование
-                                    panState = PanState(
-                                        initialCamera = camera,
-                                        startPosition = downChange.position
-                                    )
+                                    panState = PanState(camera, downChange.position)
                                     downChange.consume()
 
                                     while (true) {
                                         val moveEvent = awaitPointerEvent()
-
                                         val moveChange = moveEvent.changes.find { it.id == downChange.id }
                                         if (moveChange == null || !moveChange.pressed) break
-
-                                        val deltaScreen = moveChange.position - panState!!.startPosition
-                                        val deltaWorld = deltaScreen / zoom
-                                        camera = panState!!.initialCamera - deltaWorld
-
+                                        val delta = (moveChange.position - panState!!.startPosition) / zoom
+                                        camera = panState!!.initialCamera - delta
                                         moveChange.consume()
                                     }
                                     panState = null
@@ -290,34 +367,77 @@ fun DragWithSelectionBorder() {
                 }
             }
     ) {
-        blocks.values.forEach { block ->
-            val screenPos = worldToScreen(block.position, camera, zoom)
-            val screenSize = block.size * zoom  // Размер блока масштабируется
+        // Стрелки РИСУЮТСЯ ПОД блоками
+        arrows.forEach { arrow ->
+            val source = blocks[arrow.sourceBlockId]
+            val target = blocks[arrow.targetBlockId]
+            if (source != null && target != null) {
+                // Вычисляем точки соединения по краям блоков (а не по центру)
+                val sourceEdge = getEdgePoint(
+                    source.position,
+                    source.size,
+                    target.position + Offset(target.size.width / 2f, target.size.height / 2f)
+                )
+                val targetEdge = getEdgePoint(
+                    target.position,
+                    target.size,
+                    source.position + Offset(source.size.width / 2f, source.size.height / 2f)
+                )
 
+                ArrowComponent(
+                    start = worldToScreen(sourceEdge, camera, zoom),
+                    end = worldToScreen(targetEdge, camera, zoom),
+                    style = arrow.style,
+                    zoom = zoom
+                )
+            }
+        }
+
+        // Блоки поверх стрелок
+        blocks.values.forEach { block ->
             BlockComponent(
-                position = screenPos,
-                size = screenSize,
+                position = worldToScreen(block.position, camera, zoom),
+                size = block.size * zoom,
                 color = block.color,
                 isSelected = block.id == selectedBlockId,
                 content = block.content,
-                zoom = zoom  // Передаём зум для масштабирования текста
+                zoom = zoom
             )
+        }
+
+        // Пунктирная линия в режиме соединения
+        connectionMode?.let { mode ->
+            blocks[mode.sourceBlockId]?.let { sourceBlock ->
+                val sourceCenter = worldToScreen(
+                    sourceBlock.position + Offset(sourceBlock.size.width / 2f, sourceBlock.size.height / 2f),
+                    camera,
+                    zoom
+                )
+                Canvas(Modifier.fillMaxSize()) {
+                    drawLine(
+                        color = Color(0x8042A5F5),
+                        start = sourceCenter,
+                        end = cursorPosition,
+                        strokeWidth = 2.5f,
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 4f), 0f)
+                    )
+                }
+            }
         }
     }
 
-    // Диалог создания блока
     if (showCreateDialog) {
         CreateBlockDialog(
             initialWidth = 100f,
             initialHeight = 100f,
             initialColor = DefaultBlockColors[0],
             initialContent = null,
-            onConfirm = { width, height, color, content ->
+            onConfirm = { w, h, c, cont ->
                 val newBlock = Block(
                     position = createPosition,
-                    size = Size(width, height),
-                    color = color,
-                    content = content
+                    size = Size(w, h),
+                    color = c,
+                    content = cont
                 )
                 blocks[newBlock.id] = newBlock
                 showCreateDialog = false
@@ -326,20 +446,18 @@ fun DragWithSelectionBorder() {
         )
     }
 
-    // Диалог редактирования блока
     if (showEditDialog && blockToEdit != null) {
         CreateBlockDialog(
             initialWidth = blockToEdit!!.size.width,
             initialHeight = blockToEdit!!.size.height,
             initialColor = blockToEdit!!.color,
             initialContent = blockToEdit!!.content,
-            onConfirm = { width, height, color, content ->
-                val updatedBlock = blockToEdit!!.copy(
-                    size = Size(width, height),
-                    color = color,
-                    content = content
+            onConfirm = { w, h, c, cont ->
+                blocks[blockToEdit!!.id] = blockToEdit!!.copy(
+                    size = Size(w, h),
+                    color = c,
+                    content = cont
                 )
-                blocks[updatedBlock.id] = updatedBlock
                 showEditDialog = false
                 blockToEdit = null
             },
@@ -350,237 +468,252 @@ fun DragWithSelectionBorder() {
         )
     }
 
-    // Контекстное меню (увеличенное по высоте)
-    if (showContextMenu) {
-        ContextMenu(
+    if (showContextMenu && selectedBlockForContextMenu != null) {
+        BlockContextMenu(
             position = contextMenuPosition,
+            block = selectedBlockForContextMenu!!,
+            arrows = arrows,
             onEdit = {
                 blockToEdit = selectedBlockForContextMenu
                 showEditDialog = true
                 showContextMenu = false
             },
+            onConnect = {
+                connectionMode = ConnectionMode(selectedBlockForContextMenu!!.id)
+                showContextMenu = false
+            },
+            onDisconnect = {
+                blockToDisconnect = selectedBlockForContextMenu
+                // Находим все стрелки, связанные с этим блоком
+                connectionsToDisconnect = arrows.filter {
+                    it.sourceBlockId == selectedBlockForContextMenu!!.id ||
+                            it.targetBlockId == selectedBlockForContextMenu!!.id
+                }
+                showDisconnectDialog = true
+                showContextMenu = false
+            },
             onDelete = {
-                selectedBlockForContextMenu?.let { block ->
-                    blocks.remove(block.id)
+                selectedBlockForContextMenu?.let { b ->
+                    blocks.remove(b.id)
+                    arrows.removeAll { it.sourceBlockId == b.id || it.targetBlockId == b.id }
                 }
                 showContextMenu = false
             },
-            onChangeColor = {
-                showContextMenu = false
+            onClose = { showContextMenu = false }
+        )
+    }
+
+    // Диалог для разъединения блоков
+    if (showDisconnectDialog && blockToDisconnect != null) {
+        DisconnectDialog(
+            block = blockToDisconnect!!,
+            connections = connectionsToDisconnect,
+            blocks = blocks,
+            onDisconnect = { arrowId ->
+                arrows.removeIf { it.id == arrowId }
             },
-            onCopy = {
-                showContextMenu = false
+            onDisconnectAll = {
+                val blockId = blockToDisconnect!!.id
+                arrows.removeAll { it.sourceBlockId == blockId || it.targetBlockId == blockId }
+                showDisconnectDialog = false
+                blockToDisconnect = null
             },
-            onClose = {
-                showContextMenu = false
+            onCancel = {
+                showDisconnectDialog = false
+                blockToDisconnect = null
             }
         )
     }
 }
 
+// Вспомогательная функция для вычисления точки на краю блока, направленной к цели
+private fun getEdgePoint(blockPos: Offset, blockSize: Size, targetPos: Offset): Offset {
+    val blockCenter = blockPos + Offset(blockSize.width / 2f, blockSize.height / 2f)
+    val dx = targetPos.x - blockCenter.x
+    val dy = targetPos.y - blockCenter.y
+
+    if (abs(dx) > abs(dy)) {
+        // Горизонтальное направление
+        val x = if (dx > 0) blockPos.x + blockSize.width else blockPos.x
+        val y = blockCenter.y
+        return Offset(x, y)
+    } else {
+        // Вертикальное направление
+        val x = blockCenter.x
+        val y = if (dy > 0) blockPos.y + blockSize.height else blockPos.y
+        return Offset(x, y)
+    }
+}
+
 @Composable
 fun CreateBlockDialog(
-    initialWidth: Float = 100f,
-    initialHeight: Float = 100f,
-    initialColor: Color = DefaultBlockColors[0],
-    initialContent: Element? = null,
+    initialWidth: Float,
+    initialHeight: Float,
+    initialColor: Color,
+    initialContent: Element?,
     onConfirm: (Float, Float, Color, Element?) -> Unit,
     onCancel: () -> Unit
 ) {
     var widthText by remember { mutableStateOf(initialWidth.toString()) }
     var heightText by remember { mutableStateOf(initialHeight.toString()) }
     var selectedColor by remember { mutableStateOf(initialColor) }
-
-    // Создаем список доступных типов элементов
-    val elementTypes = listOf(
-        "TextElement",
-        "IntElement",
-        "DoubleElement",
-        "ChoiceElement",
-        "Block_",
-        "BlockUnderText",
-        "IntLimitElement",
-        "DoubleLimitElement"
+    val types = listOf(
+        "TextElement", "IntElement", "DoubleElement", "ChoiceElement",
+        "Block_", "BlockUnderText", "IntLimitElement", "DoubleLimitElement"
     )
-
-    // Используем mutableStateOf для типа элемента
-    var elementType by remember { mutableStateOf("TextElement") }
+    var type by remember { mutableStateOf("TextElement") }
     var expanded by remember { mutableStateOf(false) }
+    var text by remember { mutableStateOf("") }
+    var int by remember { mutableStateOf("0") }
+    var dbl by remember { mutableStateOf("0.0") }
+    var choices by remember { mutableStateOf("") }
+    var onlyChoices by remember { mutableStateOf(false) }
+    var intLimit by remember { mutableStateOf("0") }
+    var dblLimit by remember { mutableStateOf("0.0") }
+    var ranges by remember { mutableStateOf("") }
 
-    // Добавляем remember для каждого типа контента
-    var textContent by remember { mutableStateOf("") }
-    var intContent by remember { mutableStateOf("0") }
-    var doubleContent by remember { mutableStateOf("0.0") }
-    var choicesContent by remember { mutableStateOf("") }
-    var isOnlyChoices by remember { mutableStateOf(false) }
-    var intLimitContent by remember { mutableStateOf("0") }
-    var doubleLimitContent by remember { mutableStateOf("0.0") }
-    var limitRanges by remember { mutableStateOf("") }
-
-    // 👇 ИНИЦИАЛИЗИРУЕМ ПОЛЯ ТОЛЬКО ОДИН РАЗ при открытии диалога
-    LaunchedEffect(Unit) {
+    LaunchedEffect(initialContent) {
         when (initialContent) {
             is TextElement -> {
-                elementType = "TextElement"
-                textContent = initialContent.text
+                type = "TextElement"
+                text = initialContent.text
             }
             is IntElement -> {
-                elementType = "IntElement"
-                intContent = initialContent.int.toString()
+                if (initialContent is IntLimitElement) {
+                    type = "IntLimitElement"
+                    intLimit = initialContent.int.toString()
+                    ranges = initialContent.limit.joinToString(", ") { "[${it.start}..${it.endInclusive}]" }
+                } else {
+                    type = "IntElement"
+                    int = initialContent.int.toString()
+                }
             }
             is DoubleElement -> {
-                elementType = "DoubleElement"
-                doubleContent = initialContent.double.toString()
+                if (initialContent is DoubleLimitElement) {
+                    type = "DoubleLimitElement"
+                    dblLimit = initialContent.double.toString()
+                    ranges = initialContent.limit.joinToString(", ") { "[${it.from}..${it.to}]" }
+                } else {
+                    type = "DoubleElement"
+                    dbl = initialContent.double.toString()
+                }
             }
             is ChoiceElement -> {
-                elementType = "ChoiceElement"
-                choicesContent = initialContent.text
-                isOnlyChoices = initialContent.isOnlyChoices
+                type = "ChoiceElement"
+                choices = initialContent.text
+                onlyChoices = initialContent.isOnlyChoices
             }
             is Block_ -> {
-                elementType = "Block_"
-                textContent = initialContent.text
-            }
-            is BlockUnderText -> {
-                elementType = "BlockUnderText"
-                textContent = initialContent.text
-            }
-            is IntLimitElement -> {
-                elementType = "IntLimitElement"
-                intLimitContent = initialContent.int.toString()
-                limitRanges = initialContent.limit.joinToString(", ") { "[${it.start}..${it.endInclusive}]" }
-            }
-            is DoubleLimitElement -> {
-                elementType = "DoubleLimitElement"
-                doubleLimitContent = initialContent.double.toString()
-                limitRanges = initialContent.limit.joinToString(", ") { "[${it.from}..${it.to}]" }
+                if (initialContent is BlockUnderText) {
+                    type = "BlockUnderText"
+                } else {
+                    type = "Block_"
+                }
+                text = initialContent.text
             }
             else -> {
-                elementType = "TextElement"
-                textContent = ""
+                type = "TextElement"
+                text = ""
             }
         }
     }
 
-    // 👇 Сбрасываем поля при смене типа элемента
-    LaunchedEffect(elementType) {
-        when (elementType) {
-            "TextElement", "Block_", "BlockUnderText" -> textContent = ""
-            "IntElement" -> intContent = "0"
-            "DoubleElement" -> doubleContent = "0.0"
-            "ChoiceElement" -> {
-                choicesContent = ""
-                isOnlyChoices = false
-            }
-            "IntLimitElement" -> {
-                intLimitContent = "0"
-                limitRanges = ""
-            }
-            "DoubleLimitElement" -> {
-                doubleLimitContent = "0.0"
-                limitRanges = ""
-            }
-        }
-    }
+    val w = widthText.toFloatOrNull() ?: 100f
+    val h = heightText.toFloatOrNull() ?: 100f
+    val valid = w in 10f..5000f && h in 10f..5000f
 
-    val width = widthText.toFloatOrNull() ?: 100f
-    val height = heightText.toFloatOrNull() ?: 100f
-    val isValid = width in 10f..5000f && height in 10f..5000f
-
-    val content: Element? = when (elementType) {
-        "TextElement" -> TextElement(textContent)
-        "IntElement" -> IntElement(intContent.toIntOrNull() ?: 0)
-        "DoubleElement" -> DoubleElement(doubleContent.toDoubleOrNull() ?: 0.0)
+    val content: Element? = when (type) {
+        "TextElement" -> TextElement(text)
+        "IntElement" -> IntElement(int.toIntOrNull() ?: 0)
+        "DoubleElement" -> DoubleElement(dbl.toDoubleOrNull() ?: 0.0)
         "ChoiceElement" -> ChoiceElement(
-            text = choicesContent,
-            choices = choicesContent.split(",").filter { it.isNotBlank() },
-            isOnlyChoices = isOnlyChoices
+            choices,
+            choices.split(",").filter { it.isNotBlank() },
+            onlyChoices
         )
-        "Block_" -> Block_(textContent, emptyMap())
-        "BlockUnderText" -> BlockUnderText(textContent, emptyMap())
+        "Block_" -> Block_(text, emptyMap())
+        "BlockUnderText" -> BlockUnderText(text, emptyMap())
         "IntLimitElement" -> {
-            val limits = limitRanges.split(",")
+            val limits = ranges.split(",")
                 .map { it.trim() }
                 .filter { it.isNotBlank() }
-                .map { rangeStr ->
-                    val parts = rangeStr.trim('[', ']').split("..")
-                    if (parts.size == 2) {
-                        try {
-                            val start = parts[0].toInt()
-                            val end = parts[1].toInt()
+                .mapNotNull { rangeStr ->
+                    try {
+                        val clean = rangeStr.trim('[', ']', ' ')
+                        val parts = clean.split("..").map { it.trim() }
+                        if (parts.size == 2) {
+                            val start = parts[0].toIntOrNull() ?: Int.MIN_VALUE
+                            val end = parts[1].toIntOrNull() ?: Int.MAX_VALUE
                             start..end
-                        } catch (e: Exception) {
-                            Int.MIN_VALUE..Int.MAX_VALUE
+                        } else {
+                            null
                         }
-                    } else {
-                        Int.MIN_VALUE..Int.MAX_VALUE
+                    } catch (e: Exception) {
+                        null
                     }
-                }
-            IntLimitElement(intLimitContent.toIntOrNull() ?: 0, limits)
+                }.ifEmpty { listOf(Int.MIN_VALUE..Int.MAX_VALUE) }
+            IntLimitElement(intLimit.toIntOrNull() ?: 0, limits)
         }
         "DoubleLimitElement" -> {
-            val limits = limitRanges.split(",")
+            val limits = ranges.split(",")
                 .map { it.trim() }
                 .filter { it.isNotBlank() }
-                .map { rangeStr ->
-                    val parts = rangeStr.trim('[', ']').split("..")
-                    if (parts.size == 2) {
-                        try {
-                            val start = parts[0].toDouble()
-                            val end = parts[1].toDouble()
-                            start..end
-                        } catch (e: Exception) {
-                            Double.MIN_VALUE..Double.MAX_VALUE
+                .mapNotNull { rangeStr ->
+                    try {
+                        val clean = rangeStr.trim('[', ']', ' ')
+                        val parts = clean.split("..").map { it.trim() }
+                        if (parts.size == 2) {
+                            val start = parts[0].toDoubleOrNull() ?: Double.MIN_VALUE
+                            val end = parts[1].toDoubleOrNull() ?: Double.MAX_VALUE
+                            DoubleRange(start, end)
+                        } else {
+                            null
                         }
-                    } else {
-                        Double.MIN_VALUE..Double.MAX_VALUE
+                    } catch (e: Exception) {
+                        null
                     }
-                }
-            DoubleLimitElement(doubleLimitContent.toDoubleOrNull() ?: 0.0, limits)
+                }.ifEmpty { listOf(DoubleRange(Double.MIN_VALUE, Double.MAX_VALUE)) }
+            DoubleLimitElement(dblLimit.toDoubleOrNull() ?: 0.0, limits)
         }
-        else -> null
+        else -> TextElement(text)
     }
 
     Dialog(onDismissRequest = onCancel) {
         Surface(
-            shape = RoundedCornerShape(8.dp),
-            tonalElevation = 6.dp
+            shape = RoundedCornerShape(12.dp),
+            tonalElevation = 8.dp
         ) {
             Column(
                 modifier = Modifier
-                    .padding(16.dp)
-                    .width(300.dp)
+                    .padding(20.dp)
+                    .width(320.dp)
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    text = if (initialWidth == 100f) "Создать новый блок" else "Редактировать блок",
-                    style = MaterialTheme.typography.titleMedium
+                    text = if (initialContent == null) "Создать новый блок" else "Редактировать блок",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                 )
 
                 OutlinedTextField(
                     value = widthText,
-                    onValueChange = {
-                        widthText = it.filter { char -> char.isDigit() || char == '.' }
-                    },
+                    onValueChange = { widthText = it.filter { c -> c.isDigit() || c == '.' } },
                     label = { Text("Ширина (10-5000)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
-                    isError = width !in 10f..5000f
+                    isError = w !in 10f..5000f
                 )
 
                 OutlinedTextField(
                     value = heightText,
-                    onValueChange = {
-                        heightText = it.filter { char -> char.isDigit() || char == '.' }
-                    },
+                    onValueChange = { heightText = it.filter { c -> c.isDigit() || c == '.' } },
                     label = { Text("Высота (10-5000)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
-                    isError = height !in 10f..5000f
+                    isError = h !in 10f..5000f
                 )
 
-                // ИСПРАВЛЕННОЕ МЕНЮ БЕЗ ЗАВИСИМОСТИ ОТ ICONS
                 Box {
                     Button(
                         onClick = { expanded = true },
@@ -592,58 +725,54 @@ fun CreateBlockDialog(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(text = elementType, fontSize = 14.sp)
+                            Text(text = type, fontSize = 16.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
                             Text(
                                 text = "▼",
                                 modifier = Modifier.padding(start = 8.dp),
-                                fontSize = 16.sp,
+                                fontSize = 18.sp,
                                 color = Color.Gray
                             )
                         }
                     }
 
-                    // DropdownMenu из material3 работает без иконок
                     DropdownMenu(
                         expanded = expanded,
                         onDismissRequest = { expanded = false },
-                        modifier = Modifier
-                            .width(240.dp)  // Увеличена ширина для комфортного отображения
-                            .shadow(elevation = 4.dp)
+                        modifier = Modifier.width(260.dp)
                     ) {
-                        // Все 8 типов элементов будут полностью видны благодаря прокрутке
-                        elementTypes.forEach { type ->
+                        types.forEach { t ->
                             DropdownMenuItem(
                                 text = {
                                     Text(
-                                        text = type,
-                                        fontSize = 14.sp,
-                                        color = if (type == elementType) Color(0xFF2196F3) else Color.Black
+                                        text = t,
+                                        fontSize = 15.sp,
+                                        color = if (t == type) Color(0xFF2196F3) else Color.Black,
+                                        fontWeight = if (t == type) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal
                                     )
                                 },
                                 onClick = {
-                                    elementType = type
+                                    type = t
                                     expanded = false
                                 },
-                                modifier = Modifier.height(40.dp) // Фиксированная высота для элементов
+                                modifier = Modifier.height(48.dp)
                             )
                         }
                     }
                 }
 
-                // В зависимости от типа элемента отображаем соответствующие поля
-                when (elementType) {
-                    "TextElement" -> {
+                when (type) {
+                    "TextElement", "Block_", "BlockUnderText" -> {
                         OutlinedTextField(
-                            value = textContent,
-                            onValueChange = { textContent = it },
+                            value = text,
+                            onValueChange = { text = it },
                             label = { Text("Текст") },
                             singleLine = true
                         )
                     }
                     "IntElement" -> {
                         OutlinedTextField(
-                            value = intContent,
-                            onValueChange = { intContent = it.filter { char -> char.isDigit() || char == '.' } },
+                            value = int,
+                            onValueChange = { int = it.filter { c -> c.isDigit() || c == '-' } },
                             label = { Text("Целое число") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true
@@ -651,89 +780,100 @@ fun CreateBlockDialog(
                     }
                     "DoubleElement" -> {
                         OutlinedTextField(
-                            value = doubleContent,
-                            onValueChange = { doubleContent = it.filter { char -> char.isDigit() || char == '.' } },
+                            value = dbl,
+                            onValueChange = { dbl = it.filter { c -> c.isDigit() || c == '.' || c == '-' } },
                             label = { Text("Дробное число") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             singleLine = true
                         )
                     }
                     "ChoiceElement" -> {
                         OutlinedTextField(
-                            value = choicesContent,
-                            onValueChange = { choicesContent = it },
+                            value = choices,
+                            onValueChange = { choices = it },
                             label = { Text("Варианты (через запятую)") },
                             singleLine = true
                         )
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(
-                                checked = isOnlyChoices,
-                                onCheckedChange = { isOnlyChoices = it }
+                                checked = onlyChoices,
+                                onCheckedChange = { onlyChoices = it }
                             )
                             Text("Только выбор из вариантов")
                         }
                     }
-                    "Block_" -> {
-                        OutlinedTextField(
-                            value = textContent,
-                            onValueChange = { textContent = it },
-                            label = { Text("Текст блока") },
-                            singleLine = true
-                        )
-                    }
-                    "BlockUnderText" -> {
-                        OutlinedTextField(
-                            value = textContent,
-                            onValueChange = { textContent = it },
-                            label = { Text("Текст блока") },
-                            singleLine = true
-                        )
-                    }
                     "IntLimitElement" -> {
                         OutlinedTextField(
-                            value = intLimitContent,
-                            onValueChange = { intLimitContent = it.filter { char -> char.isDigit() || char == '.' } },
+                            value = intLimit,
+                            onValueChange = { intLimit = it.filter { c -> c.isDigit() || c == '-' } },
                             label = { Text("Целое число") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true
                         )
                         OutlinedTextField(
-                            value = limitRanges,
-                            onValueChange = { limitRanges = it },
-                            label = { Text("Ограничения (формат: [0..100], [200..300])") },
-                            singleLine = true
+                            value = ranges,
+                            onValueChange = { ranges = it },
+                            label = { Text("Ограничения [0..100], [200..300]") },
+                            singleLine = false,
+                            maxLines = 2
                         )
                     }
                     "DoubleLimitElement" -> {
                         OutlinedTextField(
-                            value = doubleLimitContent,
-                            onValueChange = { doubleLimitContent = it.filter { char -> char.isDigit() || char == '.' } },
+                            value = dblLimit,
+                            onValueChange = { dblLimit = it.filter { c -> c.isDigit() || c == '.' || c == '-' } },
                             label = { Text("Дробное число") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             singleLine = true
                         )
                         OutlinedTextField(
-                            value = limitRanges,
-                            onValueChange = { limitRanges = it },
-                            label = { Text("Ограничения (формат: [0.0..100.0], [200.0..300.0])") },
-                            singleLine = true
+                            value = ranges,
+                            onValueChange = { ranges = it },
+                            label = { Text("Ограничения [0.0..100.0], [200.0..300.0]") },
+                            singleLine = false,
+                            maxLines = 2
                         )
                     }
                 }
 
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Цвет блока:", style = MaterialTheme.typography.bodyMedium)
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            repeat(4) { index ->
-                                val color = DefaultBlockColors[index]
-                                ColorOption(color, selectedColor) { selectedColor = color }
-                            }
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            repeat(4) { index ->
-                                val color = DefaultBlockColors[4 + index]
-                                ColorOption(color, selectedColor) { selectedColor = color }
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Цвет блока:", style = MaterialTheme.typography.bodyLarge, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                    repeat(2) { row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            repeat(4) { col ->
+                                val idx = row * 4 + col
+                                val color = DefaultBlockColors[idx]
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .border(
+                                            width = if (color == selectedColor) 3.dp else 2.dp,
+                                            color = if (color == selectedColor) Color.White else Color.Gray,
+                                            shape = RoundedCornerShape(8.dp)
+                                        )
+                                        .background(color, RoundedCornerShape(8.dp))
+                                        .clickable { selectedColor = color },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (color == selectedColor) {
+                                        Canvas(modifier = Modifier.size(20.dp)) {
+                                            drawLine(
+                                                color = Color.White,
+                                                start = Offset(5f, 10f),
+                                                end = Offset(9f, 14f),
+                                                strokeWidth = 3f,
+                                                cap = StrokeCap.Round
+                                            )
+                                            drawLine(
+                                                color = Color.White,
+                                                start = Offset(9f, 14f),
+                                                end = Offset(15f, 6f),
+                                                strokeWidth = 3f,
+                                                cap = StrokeCap.Round
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -741,17 +881,27 @@ fun CreateBlockDialog(
 
                 Row(
                     modifier = Modifier.align(Alignment.End),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Button(onClick = onCancel, colors = ButtonDefaults.buttonColors(containerColor = Color.Gray)) {
-                        Text("Отмена")
+                    Button(
+                        onClick = onCancel,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.Gray),
+                        modifier = Modifier.width(100.dp)
+                    ) {
+                        Text("Отмена", fontSize = 16.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
                     }
                     Button(
-                        onClick = { onConfirm(width, height, selectedColor, content) },
-                        enabled = isValid,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
+                        onClick = { onConfirm(w, h, selectedColor, content) },
+                        enabled = valid,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
+                        modifier = Modifier.width(120.dp)
                     ) {
-                        Text(if (initialWidth == 100f) "Создать" else "Сохранить")
+                        Text(
+                            text = if (initialContent == null) "Создать" else "Сохранить",
+                            fontSize = 16.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                            color = Color.White
+                        )
                     }
                 }
             }
@@ -760,27 +910,31 @@ fun CreateBlockDialog(
 }
 
 @Composable
-fun ContextMenu(
+fun BlockContextMenu(
     position: Offset,
+    block: Block,
+    arrows: List<ArrowElement>,
     onEdit: () -> Unit,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit,
     onDelete: () -> Unit,
-    onChangeColor: () -> Unit,
-    onCopy: () -> Unit,
     onClose: () -> Unit
 ) {
+    // Проверяем, есть ли у блока соединения для показа пункта "Разъединить"
+    val hasConnections = arrows.any { it.sourceBlockId == block.id || it.targetBlockId == block.id }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .clickable { onClose() }  // Закрыть меню при клике вне его
+            .clickable { onClose() }
     ) {
-        // Крестик для закрытия меню
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(4.dp)
+                .padding(8.dp)
                 .clickable { onClose() }
         ) {
-            Text("×", fontSize = 16.sp, color = Color.Gray)
+            Text(text = "×", fontSize = 24.sp, color = Color.Gray, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
         }
 
         Box(
@@ -790,46 +944,55 @@ fun ContextMenu(
                     translationY = position.y
                 }
                 .background(Color.White)
-                .border(1.dp, Color.Gray, RoundedCornerShape(4.dp))
-                .padding(8.dp)
-                .width(180.dp)
-                .height(120.dp)
+                .border(2.dp, Color(0xFF42A5F5), RoundedCornerShape(12.dp))  // Голубая рамка для выделения
+                .padding(12.dp)
+                .width(240.dp)
+                .shadow(elevation = 8.dp)  // Тень для глубины
         ) {
             Column(
                 modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                // Заголовок меню
                 Text(
-                    "Редактировать",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onEdit() }
-                        .padding(16.dp)
-                        .background(Color.White, RoundedCornerShape(4.dp))
+                    text = "Действия с блоком",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    color = Color(0xFF1976D2),
+                    modifier = Modifier.padding(bottom = 8.dp)
                 )
-                Text(
-                    "Удалить",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onDelete() }
-                        .padding(16.dp)
-                        .background(Color.White, RoundedCornerShape(4.dp))
+
+                // Кнопка Редактировать
+                MenuItem(
+                    text = "✏️ Редактировать",
+                    backgroundColor = Color(0xFFF5F5F5),
+                    onClick = { onEdit(); onClose() }
                 )
-                Text(
-                    "Изменить цвет",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onChangeColor() }
-                        .padding(16.dp)
-                        .background(Color.White, RoundedCornerShape(4.dp))
+
+                // Кнопка Объединить
+                MenuItem(
+                    text = "🔗 Объединить",
+                    backgroundColor = Color(0xFFE3F2FD),
+                    textColor = Color(0xFF1976D2),
+                    onClick = { onConnect(); onClose() }
                 )
-                Text(
-                    "Копировать",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onCopy() }
-                        .padding(16.dp)
-                        .background(Color.White, RoundedCornerShape(4.dp))
+
+                // Кнопка Разъединить (показывается только если есть соединения)
+                if (hasConnections) {
+                    MenuItem(
+                        text = "✂️ Разъединить",
+                        backgroundColor = Color(0xFFF3E5F5),
+                        textColor = Color(0xFF6A1B9A),
+                        onClick = { onDisconnect(); onClose() }
+                    )
+                }
+
+                // Кнопка Удалить
+                MenuItem(
+                    text = "🗑️ Удалить",
+                    backgroundColor = Color(0xFFFFE5E5),
+                    textColor = Color(0xFFC62828),
+                    onClick = { onDelete(); onClose() }
                 )
             }
         }
@@ -837,35 +1000,141 @@ fun ContextMenu(
 }
 
 @Composable
-private fun ColorOption(color: Color, selectedColor: Color, onClick: () -> Unit) {
-    Box(
+private fun MenuItem(
+    text: String,
+    backgroundColor: Color,
+    textColor: Color = Color.Black,
+    onClick: () -> Unit
+) {
+    Text(
+        text = text,
         modifier = Modifier
-            .size(28.dp)
-            .border(
-                width = if (color == selectedColor) 2.dp else 1.dp,
-                color = if (color == selectedColor) Color.White else Color.Gray,
-                shape = RoundedCornerShape(4.dp)
-            )
-            .background(color, RoundedCornerShape(4.dp))
-            .clickable { onClick() },
-        contentAlignment = Alignment.Center
-    ) {
-        if (color == selectedColor) {
-            Canvas(modifier = Modifier.size(16.dp)) {
-                drawLine(
-                    color = Color.White,
-                    start = Offset(3f, 8f),
-                    end = Offset(7f, 12f),
-                    strokeWidth = 2f,
-                    cap = StrokeCap.Round
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(vertical = 14.dp, horizontal = 16.dp)
+            .background(backgroundColor, RoundedCornerShape(8.dp)),
+        fontSize = 16.sp,
+        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+        color = textColor
+    )
+}
+
+@Composable
+fun DisconnectDialog(
+    block: Block,
+    connections: List<ArrowElement>,
+    blocks: Map<String, Block>,
+    onDisconnect: (String) -> Unit,
+    onDisconnectAll: () -> Unit,
+    onCancel: () -> Unit
+) {
+    Dialog(onDismissRequest = onCancel) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            tonalElevation = 10.dp,
+            modifier = Modifier.width(400.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(24.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = "Разъединить блоки",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    color = Color(0xFF6A1B9A)
                 )
-                drawLine(
-                    color = Color.White,
-                    start = Offset(7f, 12f),
-                    end = Offset(13f, 4f),
-                    strokeWidth = 2f,
-                    cap = StrokeCap.Round
+
+                Text(
+                    text = "Выберите соединения для удаления:",
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(bottom = 8.dp)
                 )
+
+                // Список соединений
+                connections.forEach { arrow ->
+                    val otherBlock = if (arrow.sourceBlockId == block.id) {
+                        blocks[arrow.targetBlockId]
+                    } else {
+                        blocks[arrow.sourceBlockId]
+                    }
+
+                    if (otherBlock != null) {
+                        val direction = if (arrow.sourceBlockId == block.id) "→" else "←"
+                        val otherText = when (otherBlock.content) {
+                            is TextElement -> (otherBlock.content as TextElement).text
+                            is IntElement -> (otherBlock.content as IntElement).int.toString()
+                            is DoubleElement -> (otherBlock.content as DoubleElement).double.toString()
+                            else -> "Блок"
+                        }.take(20).let { if (it.length == 20) "$it..." else it }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onDisconnect(arrow.id) }
+                                .padding(12.dp)
+                                .background(Color(0xFFF5F5F5), RoundedCornerShape(10.dp))
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .background(Color(0xFF6A1B9A), RoundedCornerShape(4.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("×", color = Color.White, fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                            }
+
+                            Column(modifier = Modifier.padding(start = 12.dp)) {
+                                Text(
+                                    text = "$direction $otherText",
+                                    fontSize = 16.sp,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                                )
+                                Text(
+                                    text = "ID: ${otherBlock.id.take(8)}...",
+                                    fontSize = 12.sp,
+                                    color = Color.Gray
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (connections.isEmpty()) {
+                    Text(
+                        text = "Нет соединений для разъединения",
+                        color = Color.Gray,
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                        modifier = Modifier.padding(vertical = 16.dp)
+                    )
+                }
+
+                // Кнопки действий
+                Row(
+                    modifier = Modifier.align(Alignment.End),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Button(
+                        onClick = onCancel,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.Gray),
+                        modifier = Modifier.width(100.dp)
+                    ) {
+                        Text("Отмена", fontSize = 16.sp)
+                    }
+
+                    if (connections.isNotEmpty()) {
+                        Button(
+                            onClick = onDisconnectAll,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
+                            modifier = Modifier.width(140.dp)
+                        ) {
+                            Text("Разъединить все", fontSize = 16.sp, color = Color.White)
+                        }
+                    }
+                }
             }
         }
     }
@@ -873,10 +1142,6 @@ private fun ColorOption(color: Color, selectedColor: Color, onClick: () -> Unit)
 
 private fun worldToScreen(world: Offset, camera: Offset, zoom: Float): Offset = (world - camera) * zoom
 private fun screenToWorld(screen: Offset, camera: Offset, zoom: Float): Offset = screen / zoom + camera
-
-private fun isInside(point: Offset, rectTopLeft: Offset, size: Size): Boolean {
-    return point.x >= rectTopLeft.x &&
-            point.x <= rectTopLeft.x + size.width &&
-            point.y >= rectTopLeft.y &&
-            point.y <= rectTopLeft.y + size.height
-}
+private fun isInside(point: Offset, rect: Offset, size: Size): Boolean =
+    point.x >= rect.x && point.x <= rect.x + size.width &&
+            point.y >= rect.y && point.y <= rect.y + size.height
