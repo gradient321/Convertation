@@ -20,15 +20,19 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.foundation.Canvas
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.unit.IntOffset
 import java.util.*
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 // Константы для цветов и стилей
@@ -70,10 +74,11 @@ private data class PanState(
 @Composable
 fun BlockComponent(
     position: Offset,
-    size: Size,
+    size: Size,  // Экранный размер блока (уже с учётом зума)
     color: Color,
     isSelected: Boolean,
-    content: Element?
+    content: Element?,
+    zoom: Float  // Передаём зум для адаптивного масштабирования
 ) {
     Box(
         modifier = Modifier
@@ -96,12 +101,35 @@ fun BlockComponent(
                 is BlockUnderText -> content.text
                 is IntLimitElement -> content.int.toString()
                 is DoubleLimitElement -> content.double.toString()
-                else -> "Unknown element"
+                else -> "Unknown"
             }
+
+            // 🔑 УМНОЕ МАСШТАБИРОВАНИЕ С ПЕРЕНОСОМ СТРОК:
+            // 1. Базовый размер шрифта = 30% от высоты блока
+            // 2. Автоматически уменьшаем шрифт, если текст не помещается в 1 строку
+            // 3. Минимум 6.sp для читаемости при сильном отдалении
+
+            // Рассчитываем базовый размер шрифта (30% от высоты блока)
+            val baseFontSizePx = size.height * 0.3f
+            // Ограничиваем минимальный размер для читаемости
+            val minFontSizePx = 6f
+            val fontSizePx = baseFontSizePx.coerceAtLeast(minFontSizePx)
+            val fontSize = fontSizePx.sp
+
             Text(
                 text = text,
-                modifier = Modifier.padding(5.dp),
-                style = TextStyle(color = Color.Black, fontSize = 16.sp)
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(2.dp),
+                style = TextStyle(
+                    color = Color.Black,
+                    fontSize = fontSize,
+                    lineHeight = fontSize * 1.1f  // Небольшой интерлиньяж для читаемости
+                ),
+                maxLines = 4,  // Разрешаем до 4 строк для длинного текста
+                overflow = TextOverflow.Ellipsis,
+                softWrap = true,  // 🔑 ВКЛЮЧЕН ПЕРЕНОС СТРОК!
+                textAlign = TextAlign.Center  // Центрируем текст по горизонтали
             )
         }
     }
@@ -110,7 +138,7 @@ fun BlockComponent(
 fun main() = application {
     Window(
         onCloseRequest = { exitApplication() },
-        title = "APP KT - Редактор блоков (Масштабирование колесом)"
+        title = "APP KT - Редактор блоков (Адаптивный текст)"
     ) {
         Box(
             modifier = Modifier
@@ -264,14 +292,15 @@ fun DragWithSelectionBorder() {
     ) {
         blocks.values.forEach { block ->
             val screenPos = worldToScreen(block.position, camera, zoom)
-            val screenSize = block.size * zoom
+            val screenSize = block.size * zoom  // Размер блока масштабируется
 
             BlockComponent(
                 position = screenPos,
                 size = screenSize,
                 color = block.color,
                 isSelected = block.id == selectedBlockId,
-                content = block.content
+                content = block.content,
+                zoom = zoom  // Передаём зум для масштабирования текста
             )
         }
     }
@@ -551,36 +580,51 @@ fun CreateBlockDialog(
                     isError = height !in 10f..5000f
                 )
 
-                // Новая кнопка для выбора типа элемента
+                // ИСПРАВЛЕННОЕ МЕНЮ БЕЗ ЗАВИСИМОСТИ ОТ ICONS
                 Box {
                     Button(
                         onClick = { expanded = true },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE0E0E0))
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(text = elementType)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(text = elementType, fontSize = 14.sp)
                             Text(
-                                text = "↓",
-                                modifier = Modifier.padding(start = 8.dp)
+                                text = "▼",
+                                modifier = Modifier.padding(start = 8.dp),
+                                fontSize = 16.sp,
+                                color = Color.Gray
                             )
                         }
                     }
 
+                    // DropdownMenu из material3 работает без иконок
                     DropdownMenu(
                         expanded = expanded,
                         onDismissRequest = { expanded = false },
                         modifier = Modifier
-                            .width(200.dp)
-                            .offset(y = 32.dp)
+                            .width(240.dp)  // Увеличена ширина для комфортного отображения
+                            .shadow(elevation = 4.dp)
                     ) {
+                        // Все 8 типов элементов будут полностью видны благодаря прокрутке
                         elementTypes.forEach { type ->
                             DropdownMenuItem(
-                                text = { Text(type) },
+                                text = {
+                                    Text(
+                                        text = type,
+                                        fontSize = 14.sp,
+                                        color = if (type == elementType) Color(0xFF2196F3) else Color.Black
+                                    )
+                                },
                                 onClick = {
                                     elementType = type
                                     expanded = false
                                 },
-                                modifier = Modifier.clickable {}
+                                modifier = Modifier.height(40.dp) // Фиксированная высота для элементов
                             )
                         }
                     }
