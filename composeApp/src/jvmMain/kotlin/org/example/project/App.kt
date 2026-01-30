@@ -13,12 +13,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -29,7 +31,6 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.foundation.Canvas
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -88,7 +89,7 @@ open class DoubleLimitElement(
 data class ArrowStyle(
     val color: Color = Color(0xFF42A5F5),
     val thickness: Float = 2.5f,
-    val arrowheadSize: Float = 12f  // Размер наконечника
+    val arrowheadSize: Float = 12f
 )
 
 data class ArrowElement(
@@ -137,7 +138,7 @@ fun BlockComponent(
             .border(
                 width = if (isSelected) BorderWidth.dp else 0.dp,
                 color = SelectionBorderColor,
-                shape = RoundedCornerShape(4.dp)  // Скруглённые углы для блоков
+                shape = RoundedCornerShape(6.dp)
             )
     ) {
         if (content != null) {
@@ -162,7 +163,7 @@ fun BlockComponent(
                 text = text,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(4.dp),  // Больше отступов для текста
+                    .padding(6.dp),
                 style = TextStyle(
                     color = Color.Black,
                     fontSize = fontSize,
@@ -180,7 +181,6 @@ fun BlockComponent(
 @Composable
 fun ArrowComponent(start: Offset, end: Offset, style: ArrowStyle, zoom: Float) {
     Canvas(modifier = Modifier.fillMaxSize().graphicsLayer { alpha = 0.98f }) {
-        // Основная линия стрелки
         drawLine(
             color = style.color,
             start = start,
@@ -189,13 +189,11 @@ fun ArrowComponent(start: Offset, end: Offset, style: ArrowStyle, zoom: Float) {
             cap = StrokeCap.Round
         )
 
-        // Наконечник стрелки (треугольник) - только если достаточно близко для видимости
         if (zoom > 0.4f) {
             val arrowheadSize = style.arrowheadSize * zoom.coerceAtMost(1.5f)
             val angle = atan2(end.y - start.y, end.x - start.x)
-            val arrowSideAngle = PI / 6  // 30 градусов
+            val arrowSideAngle = PI / 6
 
-            // Точки треугольника наконечника
             val p1 = Offset(
                 end.x - arrowheadSize * cos(angle - arrowSideAngle).toFloat(),
                 end.y - arrowheadSize * sin(angle - arrowSideAngle).toFloat()
@@ -205,7 +203,6 @@ fun ArrowComponent(start: Offset, end: Offset, style: ArrowStyle, zoom: Float) {
                 end.y - arrowheadSize * sin(angle + arrowSideAngle).toFloat()
             )
 
-            // Рисуем закрашенный треугольник
             drawPath(
                 path = Path().apply {
                     moveTo(end.x, end.y)
@@ -220,7 +217,7 @@ fun ArrowComponent(start: Offset, end: Offset, style: ArrowStyle, zoom: Float) {
 }
 
 fun main() = application {
-    Window(onCloseRequest = { exitApplication() }, title = "APP KT - Редактор блоков с соединениями") {
+    Window(onCloseRequest = { exitApplication() }, title = "APP KT - Редактор блоков") {
         Box(modifier = Modifier.fillMaxSize()) {
             DragWithSelectionBorder()
         }
@@ -246,8 +243,6 @@ fun DragWithSelectionBorder() {
     var dragState by remember { mutableStateOf<DragState?>(null) }
     var panState by remember { mutableStateOf<PanState?>(null) }
     var cursorPosition by remember { mutableStateOf(Offset.Zero) }
-
-    // Для разъединения блоков
     var showDisconnectDialog by remember { mutableStateOf(false) }
     var blockToDisconnect by remember { mutableStateOf<Block?>(null) }
     var connectionsToDisconnect by remember { mutableStateOf<List<ArrowElement>>(emptyList()) }
@@ -367,12 +362,10 @@ fun DragWithSelectionBorder() {
                 }
             }
     ) {
-        // Стрелки РИСУЮТСЯ ПОД блоками
         arrows.forEach { arrow ->
             val source = blocks[arrow.sourceBlockId]
             val target = blocks[arrow.targetBlockId]
             if (source != null && target != null) {
-                // Вычисляем точки соединения по краям блоков (а не по центру)
                 val sourceEdge = getEdgePoint(
                     source.position,
                     source.size,
@@ -393,7 +386,6 @@ fun DragWithSelectionBorder() {
             }
         }
 
-        // Блоки поверх стрелок
         blocks.values.forEach { block ->
             BlockComponent(
                 position = worldToScreen(block.position, camera, zoom),
@@ -405,7 +397,6 @@ fun DragWithSelectionBorder() {
             )
         }
 
-        // Пунктирная линия в режиме соединения
         connectionMode?.let { mode ->
             blocks[mode.sourceBlockId]?.let { sourceBlock ->
                 val sourceCenter = worldToScreen(
@@ -484,7 +475,6 @@ fun DragWithSelectionBorder() {
             },
             onDisconnect = {
                 blockToDisconnect = selectedBlockForContextMenu
-                // Находим все стрелки, связанные с этим блоком
                 connectionsToDisconnect = arrows.filter {
                     it.sourceBlockId == selectedBlockForContextMenu!!.id ||
                             it.targetBlockId == selectedBlockForContextMenu!!.id
@@ -503,7 +493,6 @@ fun DragWithSelectionBorder() {
         )
     }
 
-    // Диалог для разъединения блоков
     if (showDisconnectDialog && blockToDisconnect != null) {
         DisconnectDialog(
             block = blockToDisconnect!!,
@@ -526,19 +515,16 @@ fun DragWithSelectionBorder() {
     }
 }
 
-// Вспомогательная функция для вычисления точки на краю блока, направленной к цели
 private fun getEdgePoint(blockPos: Offset, blockSize: Size, targetPos: Offset): Offset {
     val blockCenter = blockPos + Offset(blockSize.width / 2f, blockSize.height / 2f)
     val dx = targetPos.x - blockCenter.x
     val dy = targetPos.y - blockCenter.y
 
     if (abs(dx) > abs(dy)) {
-        // Горизонтальное направление
         val x = if (dx > 0) blockPos.x + blockSize.width else blockPos.x
         val y = blockCenter.y
         return Offset(x, y)
     } else {
-        // Вертикальное направление
         val x = blockCenter.x
         val y = if (dy > 0) blockPos.y + blockSize.height else blockPos.y
         return Offset(x, y)
@@ -680,20 +666,21 @@ fun CreateBlockDialog(
 
     Dialog(onDismissRequest = onCancel) {
         Surface(
-            shape = RoundedCornerShape(12.dp),
-            tonalElevation = 8.dp
+            shape = RoundedCornerShape(16.dp),
+            tonalElevation = 12.dp
         ) {
             Column(
                 modifier = Modifier
-                    .padding(20.dp)
-                    .width(320.dp)
+                    .padding(24.dp)
+                    .width(360.dp)
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
                 Text(
                     text = if (initialContent == null) "Создать новый блок" else "Редактировать блок",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF1976D2)
                 )
 
                 OutlinedTextField(
@@ -718,19 +705,19 @@ fun CreateBlockDialog(
                     Button(
                         onClick = { expanded = true },
                         modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE0E0E0))
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE8EAF6))
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(text = type, fontSize = 16.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
+                            Text(text = type, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = Color(0xFF1976D2))
                             Text(
                                 text = "▼",
                                 modifier = Modifier.padding(start = 8.dp),
                                 fontSize = 18.sp,
-                                color = Color.Gray
+                                color = Color(0xFF546E7A)
                             )
                         }
                     }
@@ -738,23 +725,23 @@ fun CreateBlockDialog(
                     DropdownMenu(
                         expanded = expanded,
                         onDismissRequest = { expanded = false },
-                        modifier = Modifier.width(260.dp)
+                        modifier = Modifier.width(280.dp)
                     ) {
                         types.forEach { t ->
                             DropdownMenuItem(
                                 text = {
                                     Text(
                                         text = t,
-                                        fontSize = 15.sp,
-                                        color = if (t == type) Color(0xFF2196F3) else Color.Black,
-                                        fontWeight = if (t == type) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal
+                                        fontSize = 16.sp,
+                                        color = if (t == type) Color(0xFF1976D2) else Color(0xFF424242),
+                                        fontWeight = if (t == type) FontWeight.Bold else FontWeight.Normal
                                     )
                                 },
                                 onClick = {
                                     type = t
                                     expanded = false
                                 },
-                                modifier = Modifier.height(48.dp)
+                                modifier = Modifier.height(52.dp)
                             )
                         }
                     }
@@ -836,38 +823,38 @@ fun CreateBlockDialog(
                     }
                 }
 
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Цвет блока:", style = MaterialTheme.typography.bodyLarge, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text("Цвет блока:", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     repeat(2) { row ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             repeat(4) { col ->
                                 val idx = row * 4 + col
                                 val color = DefaultBlockColors[idx]
                                 Box(
                                     modifier = Modifier
-                                        .size(36.dp)
+                                        .size(44.dp)
                                         .border(
                                             width = if (color == selectedColor) 3.dp else 2.dp,
                                             color = if (color == selectedColor) Color.White else Color.Gray,
-                                            shape = RoundedCornerShape(8.dp)
+                                            shape = RoundedCornerShape(10.dp)
                                         )
-                                        .background(color, RoundedCornerShape(8.dp))
+                                        .background(color, RoundedCornerShape(10.dp))
                                         .clickable { selectedColor = color },
                                     contentAlignment = Alignment.Center
                                 ) {
                                     if (color == selectedColor) {
-                                        Canvas(modifier = Modifier.size(20.dp)) {
+                                        Canvas(modifier = Modifier.size(24.dp)) {
                                             drawLine(
                                                 color = Color.White,
-                                                start = Offset(5f, 10f),
-                                                end = Offset(9f, 14f),
+                                                start = Offset(6f, 12f),
+                                                end = Offset(11f, 17f),
                                                 strokeWidth = 3f,
                                                 cap = StrokeCap.Round
                                             )
                                             drawLine(
                                                 color = Color.White,
-                                                start = Offset(9f, 14f),
-                                                end = Offset(15f, 6f),
+                                                start = Offset(11f, 17f),
+                                                end = Offset(18f, 8f),
                                                 strokeWidth = 3f,
                                                 cap = StrokeCap.Round
                                             )
@@ -881,25 +868,27 @@ fun CreateBlockDialog(
 
                 Row(
                     modifier = Modifier.align(Alignment.End),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Button(
                         onClick = onCancel,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.Gray),
-                        modifier = Modifier.width(100.dp)
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFBDBDBD)),
+                        modifier = Modifier.width(110.dp),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Text("Отмена", fontSize = 16.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
+                        Text("Отмена", fontSize = 16.sp, fontWeight = FontWeight.Medium)
                     }
                     Button(
                         onClick = { onConfirm(w, h, selectedColor, content) },
                         enabled = valid,
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
-                        modifier = Modifier.width(120.dp)
+                        modifier = Modifier.width(130.dp),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
                         Text(
                             text = if (initialContent == null) "Создать" else "Сохранить",
-                            fontSize = 16.sp,
-                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
                             color = Color.White
                         )
                     }
@@ -920,7 +909,6 @@ fun BlockContextMenu(
     onDelete: () -> Unit,
     onClose: () -> Unit
 ) {
-    // Проверяем, есть ли у блока соединения для показа пункта "Разъединить"
     val hasConnections = arrows.any { it.sourceBlockId == block.id || it.targetBlockId == block.id }
 
     Box(
@@ -931,10 +919,14 @@ fun BlockContextMenu(
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(8.dp)
+                .padding(12.dp)
                 .clickable { onClose() }
+                .size(36.dp)
+                .background(Color(0xFFF5F5F5), RoundedCornerShape(18.dp))
+                .border(2.dp, Color(0xFFE0E0E0), RoundedCornerShape(18.dp)),
+            contentAlignment = Alignment.Center
         ) {
-            Text(text = "×", fontSize = 24.sp, color = Color.Gray, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            Text(text = "×", fontSize = 28.sp, color = Color(0xFF616161), fontWeight = FontWeight.Bold)
         }
 
         Box(
@@ -943,55 +935,71 @@ fun BlockContextMenu(
                     translationX = position.x
                     translationY = position.y
                 }
-                .background(Color.White)
-                .border(2.dp, Color(0xFF42A5F5), RoundedCornerShape(12.dp))  // Голубая рамка для выделения
-                .padding(12.dp)
-                .width(240.dp)
-                .shadow(elevation = 8.dp)  // Тень для глубины
+                .background(Color.White, RoundedCornerShape(16.dp))
+                .border(2.dp, Color(0xFF1976D2), RoundedCornerShape(16.dp))
+                .shadow(elevation = 12.dp)
+                .padding(vertical = 16.dp)
+                .width(280.dp)
         ) {
             Column(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Заголовок меню
-                Text(
-                    text = "Действия с блоком",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                    color = Color(0xFF1976D2),
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
+                // Заголовок с иконкой
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .background(Color(0xFF1976D2), RoundedCornerShape(8.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("⋮", fontSize = 20.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                    Text(
+                        text = "Действия с блоком",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF1976D2),
+                        modifier = Modifier.padding(start = 12.dp)
+                    )
+                }
 
-                // Кнопка Редактировать
-                MenuItem(
-                    text = "✏️ Редактировать",
+                // ЕДИНООБРАЗНЫЕ КНОПКИ ОДИНАКОВОГО РАЗМЕРА
+                MenuItemButton(
+                    icon = "✏️",
+                    text = "Редактировать",
                     backgroundColor = Color(0xFFF5F5F5),
+                    iconColor = Color(0xFF2196F3),
                     onClick = { onEdit(); onClose() }
                 )
 
-                // Кнопка Объединить
-                MenuItem(
-                    text = "🔗 Объединить",
+                MenuItemButton(
+                    icon = "🔗",
+                    text = "Объединить",
                     backgroundColor = Color(0xFFE3F2FD),
-                    textColor = Color(0xFF1976D2),
+                    iconColor = Color(0xFF1976D2),
                     onClick = { onConnect(); onClose() }
                 )
 
-                // Кнопка Разъединить (показывается только если есть соединения)
                 if (hasConnections) {
-                    MenuItem(
-                        text = "✂️ Разъединить",
+                    MenuItemButton(
+                        icon = "✂️",
+                        text = "Разъединить",
                         backgroundColor = Color(0xFFF3E5F5),
-                        textColor = Color(0xFF6A1B9A),
+                        iconColor = Color(0xFF6A1B9A),
                         onClick = { onDisconnect(); onClose() }
                     )
                 }
 
-                // Кнопка Удалить
-                MenuItem(
-                    text = "🗑️ Удалить",
+                MenuItemButton(
+                    icon = "🗑️",
+                    text = "Удалить блок",
                     backgroundColor = Color(0xFFFFE5E5),
-                    textColor = Color(0xFFC62828),
+                    iconColor = Color(0xFFC62828),
                     onClick = { onDelete(); onClose() }
                 )
             }
@@ -1000,23 +1008,40 @@ fun BlockContextMenu(
 }
 
 @Composable
-private fun MenuItem(
+private fun MenuItemButton(
+    icon: String,
     text: String,
     backgroundColor: Color,
-    textColor: Color = Color.Black,
+    iconColor: Color,
     onClick: () -> Unit
 ) {
-    Text(
-        text = text,
+    Box(
         modifier = Modifier
             .fillMaxWidth()
+            .height(56.dp)  // ФИКСИРОВАННАЯ ВЫСОТА ДЛЯ ВСЕХ КНОПОК
             .clickable { onClick() }
-            .padding(vertical = 14.dp, horizontal = 16.dp)
-            .background(backgroundColor, RoundedCornerShape(8.dp)),
-        fontSize = 16.sp,
-        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
-        color = textColor
-    )
+            .background(backgroundColor, RoundedCornerShape(14.dp))
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(iconColor.copy(alpha = 0.15f), RoundedCornerShape(10.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(icon, fontSize = 20.sp, color = iconColor, fontWeight = FontWeight.Bold)
+            }
+            Text(
+                text = text,
+                modifier = Modifier.padding(start = 16.dp),
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color(0xFF212121)
+            )
+        }
+    }
 }
 
 @Composable
@@ -1030,110 +1055,151 @@ fun DisconnectDialog(
 ) {
     Dialog(onDismissRequest = onCancel) {
         Surface(
-            shape = RoundedCornerShape(16.dp),
-            tonalElevation = 10.dp,
-            modifier = Modifier.width(400.dp)
+            shape = RoundedCornerShape(20.dp),
+            tonalElevation = 14.dp,
+            modifier = Modifier.width(440.dp)
         ) {
             Column(
                 modifier = Modifier
-                    .padding(24.dp)
+                    .padding(28.dp)
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
                 Text(
-                    text = "Разъединить блоки",
+                    text = "Разъединить соединения",
                     style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                    color = Color(0xFF6A1B9A)
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF6A1B9A),
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
                 )
 
                 Text(
                     text = "Выберите соединения для удаления:",
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
 
-                // Список соединений
-                connections.forEach { arrow ->
-                    val otherBlock = if (arrow.sourceBlockId == block.id) {
-                        blocks[arrow.targetBlockId]
-                    } else {
-                        blocks[arrow.sourceBlockId]
-                    }
+                if (connections.isNotEmpty()) {
+                    connections.forEach { arrow ->
+                        val otherBlock = if (arrow.sourceBlockId == block.id) {
+                            blocks[arrow.targetBlockId]
+                        } else {
+                            blocks[arrow.sourceBlockId]
+                        }
 
-                    if (otherBlock != null) {
-                        val direction = if (arrow.sourceBlockId == block.id) "→" else "←"
-                        val otherText = when (otherBlock.content) {
-                            is TextElement -> (otherBlock.content as TextElement).text
-                            is IntElement -> (otherBlock.content as IntElement).int.toString()
-                            is DoubleElement -> (otherBlock.content as DoubleElement).double.toString()
-                            else -> "Блок"
-                        }.take(20).let { if (it.length == 20) "$it..." else it }
+                        if (otherBlock != null) {
+                            val direction = if (arrow.sourceBlockId == block.id) "→" else "←"
+                            val otherText = when (otherBlock.content) {
+                                is TextElement -> (otherBlock.content as TextElement).text
+                                is IntElement -> (otherBlock.content as IntElement).int.toString()
+                                is DoubleElement -> (otherBlock.content as DoubleElement).double.toString()
+                                else -> "Блок"
+                            }.take(25).let { if (it.length == 25) "$it..." else it }
 
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onDisconnect(arrow.id) }
-                                .padding(12.dp)
-                                .background(Color(0xFFF5F5F5), RoundedCornerShape(10.dp))
-                        ) {
-                            Box(
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
-                                    .size(24.dp)
-                                    .background(Color(0xFF6A1B9A), RoundedCornerShape(4.dp)),
-                                contentAlignment = Alignment.Center
+                                    .fillMaxWidth()
+                                    .height(64.dp)
+                                    .clickable { onDisconnect(arrow.id) }
+                                    .background(Color(0xFFF8F9FA), RoundedCornerShape(14.dp))
+                                    .padding(horizontal = 16.dp)
                             ) {
-                                Text("×", color = Color.White, fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
-                            }
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .background(Color(0xFF6A1B9A), RoundedCornerShape(8.dp)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("×", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                }
 
-                            Column(modifier = Modifier.padding(start = 12.dp)) {
-                                Text(
-                                    text = "$direction $otherText",
-                                    fontSize = 16.sp,
-                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                                )
-                                Text(
-                                    text = "ID: ${otherBlock.id.take(8)}...",
-                                    fontSize = 12.sp,
-                                    color = Color.Gray
-                                )
+                                Column(
+                                    modifier = Modifier
+                                        .padding(start = 16.dp)
+                                        .weight(1f)
+                                ) {
+                                    Text(
+                                        text = "$direction $otherText",
+                                        fontSize = 17.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = Color(0xFF1976D2)
+                                    )
+                                    Text(
+                                        text = "ID: ${otherBlock.id.take(10)}",
+                                        fontSize = 13.sp,
+                                        color = Color.Gray
+                                    )
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .size(28.dp)
+                                        .background(Color(0xFFE0E0E0), RoundedCornerShape(14.dp)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("→", fontSize = 18.sp, color = Color(0xFF616161))
+                                }
                             }
                         }
                     }
-                }
 
-                if (connections.isEmpty()) {
-                    Text(
-                        text = "Нет соединений для разъединения",
-                        color = Color.Gray,
-                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                        modifier = Modifier.padding(vertical = 16.dp)
-                    )
-                }
-
-                // Кнопки действий
-                Row(
-                    modifier = Modifier.align(Alignment.End),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
+                    // Кнопка "Разъединить все"
                     Button(
-                        onClick = onCancel,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.Gray),
-                        modifier = Modifier.width(100.dp)
+                        onClick = onDisconnectAll,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp),
+                        shape = RoundedCornerShape(16.dp)
                     ) {
-                        Text("Отмена", fontSize = 16.sp)
-                    }
-
-                    if (connections.isNotEmpty()) {
-                        Button(
-                            onClick = onDisconnectAll,
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
-                            modifier = Modifier.width(140.dp)
-                        ) {
-                            Text("Разъединить все", fontSize = 16.sp, color = Color.White)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("✂️", fontSize = 20.sp, modifier = Modifier.padding(end = 8.dp))
+                            Text(
+                                text = "Разъединить все (${connections.size})",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
                         }
                     }
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(120.dp)
+                            .background(Color(0xFFE8F5E9), RoundedCornerShape(16.dp))
+                            .padding(20.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = "Нет активных соединений",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFF2E7D32)
+                            )
+                            Text(
+                                text = "Этот блок не соединён со другими блоками",
+                                fontSize = 14.sp,
+                                color = Color.Gray,
+                                modifier = Modifier.padding(top = 8.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Кнопка Отмена
+                Button(
+                    onClick = onCancel,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFBDBDBD)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text("Отмена", fontSize = 17.sp, fontWeight = FontWeight.Medium)
                 }
             }
         }
