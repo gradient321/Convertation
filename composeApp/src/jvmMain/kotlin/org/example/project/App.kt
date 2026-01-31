@@ -108,10 +108,9 @@ data class Block(
     val size: Size = Size(160f, 60f),
     val blockType: BlockType,
     val content: Element,
-    val nextBlockId: String? = null,           // Следующий блок в основной цепочке
-    val parentIfBlockId: String? = null,       // ID родительского условия (для веток)
-    val branchIndex: Int = -1,                 // -1 = заголовок условия, 0 = ветка "да", 1+ = elif, -2 = else
-    val isConditionHeader: Boolean = false     // true = это заголовок условия (блок "Если")
+    val nextBlockId: String? = null,
+    val parentIfBlockId: String? = null,       // ID заголовка условия для веток
+    val branchIndex: Int = -1                  // -1 = заголовок условия или основная цепочка, 0 = ветка "да", 1+ = elif, -2 = else
 )
 
 private data class DragState(val offset: Offset)
@@ -147,11 +146,10 @@ fun BlockComponent(
     content: Element,
     blockType: BlockType,
     branchIndex: Int,
-    isConditionHeader: Boolean,
     zoom: Float
 ) {
     val title = when {
-        isConditionHeader -> "Если"
+        blockType is BlockType.If && branchIndex == -1 -> "Если"
         blockType is BlockType.If && branchIndex == 0 -> "Да"
         blockType is BlockType.If && branchIndex > 0 -> "Иначе если"
         blockType is BlockType.If && branchIndex == -2 -> "Иначе"
@@ -804,6 +802,7 @@ fun DragWithSelectionBorder() {
     var blockToEdit by remember { mutableStateOf<Block?>(null) }
     var showBlockTypeDialog by remember { mutableStateOf(false) }
     var blockTypeDialogSourceId by remember { mutableStateOf<String?>(null) }
+    var blockTypeDialogForBranch by remember { mutableStateOf<Pair<String, Int>?>(null) } // (parentIfBlockId, branchIndex)
     var showIfDialog by remember { mutableStateOf(false) }
     var ifDialogSourceBlockId by remember { mutableStateOf<String?>(null) }
     var dragState by remember { mutableStateOf<DragState?>(null) }
@@ -931,11 +930,13 @@ fun DragWithSelectionBorder() {
             val color = DefaultBlockColors[block.blockType] ?: DefaultBlockColors.values.first()
             // Визуальное позиционирование веток условия
             val displayPosition = when {
-                block.isConditionHeader -> block.position  // Заголовок условия без отступа
                 block.branchIndex == 0 -> Offset(block.position.x + 40f, block.position.y)  // Ветка "да" с отступом
                 block.branchIndex > 0 -> Offset(block.position.x + 40f + 30f * block.branchIndex, block.position.y)  // elif с увеличивающимся отступом
-                block.branchIndex == -2 -> Offset(block.position.x + 40f + 30f * (blocks.values.count { it.parentIfBlockId == block.parentIfBlockId && it.branchIndex > 0 } + 1), block.position.y)  // else после всех elif
-                else -> block.position  // Основная цепочка без отступа
+                block.branchIndex == -2 -> Offset(
+                    block.position.x + 40f + 30f * (blocks.values.count { it.parentIfBlockId == block.parentIfBlockId && it.branchIndex > 0 } + 1),
+                    block.position.y
+                )  // else после всех elif
+                else -> block.position  // Основная цепочка и заголовки без отступа
             }
 
             BlockComponent(
@@ -946,7 +947,6 @@ fun DragWithSelectionBorder() {
                 content = block.content,
                 blockType = block.blockType,
                 branchIndex = block.branchIndex,
-                isConditionHeader = block.isConditionHeader,
                 zoom = zoom
             )
         }
@@ -986,95 +986,142 @@ fun DragWithSelectionBorder() {
     }
 
     // Диалог выбора типа блока
-    if (showBlockTypeDialog && blockTypeDialogSourceId != null) {
-        val sourceBlock = blocks[blockTypeDialogSourceId!!]
-        val isCreatingAfterIfHeader = sourceBlock?.isConditionHeader == true && sourceBlock.branchIndex == -1
+    if (showBlockTypeDialog) {
+        val title = if (blockTypeDialogForBranch != null) {
+            when (blockTypeDialogForBranch!!.second) {
+                0 -> "Выберите действие для ветки \"да\""
+                -2 -> "Выберите действие для ветки \"иначе\""
+                else -> "Выберите действие для ветки \"иначе если\""
+            }
+        } else {
+            "Продолжить цепочку"
+        }
 
         BlockTypeSelectionDialog(
-            title = if (isCreatingAfterIfHeader) "Выберите действие для ветки \"да\"" else "Продолжить цепочку",
+            title = title,
             onSelect = { type ->
-                if (sourceBlock != null) {
-                    // Создаём новый блок ниже источника
-                    val newPosition = Offset(
-                        sourceBlock.position.x,
-                        sourceBlock.position.y + sourceBlock.size.height + 40f
-                    )
+                if (blockTypeDialogForBranch != null) {
+                    // Создание блока внутри ветки условия
+                    val (parentIfBlockId, branchIndex) = blockTypeDialogForBranch!!
+                    val parentBlock = blocks[parentIfBlockId]
 
-                    val newContent = when (type) {
-                        is BlockType.Print -> PrintElement()
-                        is BlockType.Variable -> VariableElement()
-                        is BlockType.If -> IfElement()
-                        is BlockType.Return -> ReturnElement()
-                        is BlockType.Function -> FunctionElement()
-                    }
+                    if (parentBlock != null) {
+                        // Находим последний блок в этой ветке для позиционирования
+                        val lastBlockInBranch = blocks.values
+                            .filter { it.parentIfBlockId == parentIfBlockId && it.branchIndex == branchIndex }
+                            .maxByOrNull { it.position.y } ?: parentBlock
 
-                    // Если создаём после заголовка условия - это ветка "да"
-                    val (newBranchIndex, newIsConditionHeader, newParentIfBlockId) = when {
-                        sourceBlock.isConditionHeader && sourceBlock.branchIndex == -1 ->
-                            Triple(0, false, sourceBlock.id)  // Ветка "да" привязана к заголовку
-                        sourceBlock.parentIfBlockId != null ->
-                            Triple(sourceBlock.branchIndex, false, sourceBlock.parentIfBlockId)  // Продолжение текущей ветки
-                        else ->
-                            Triple(-1, false, null)  // Основная цепочка
-                    }
-
-                    val newBlock = Block(
-                        position = newPosition,
-                        blockType = type,
-                        content = newContent,
-                        parentIfBlockId = newParentIfBlockId,
-                        branchIndex = newBranchIndex,
-                        isConditionHeader = newIsConditionHeader
-                    )
-
-                    // Обновляем связь "следующий блок"
-                    blocks[sourceBlock.id] = sourceBlock.copy(nextBlockId = newBlock.id)
-                    blocks[newBlock.id] = newBlock
-
-                    // Создаём стрелку
-                    arrows.add(
-                        ExecutionArrow(
-                            fromBlockId = sourceBlock.id,
-                            toBlockId = newBlock.id,
-                            style = ArrowStyle(color = Color(0xFF42A5F5), thickness = 2.5f, arrowheadSize = 10f)
+                        val newPosition = Offset(
+                            parentBlock.position.x,
+                            lastBlockInBranch.position.y + lastBlockInBranch.size.height + 40f
                         )
-                    )
+
+                        val newContent = when (type) {
+                            is BlockType.Print -> PrintElement()
+                            is BlockType.Variable -> VariableElement()
+                            is BlockType.If -> IfElement()
+                            is BlockType.Return -> ReturnElement()
+                            is BlockType.Function -> FunctionElement()
+                        }
+
+                        val newBlock = Block(
+                            position = newPosition,
+                            blockType = type,
+                            content = newContent,
+                            parentIfBlockId = parentIfBlockId,
+                            branchIndex = branchIndex
+                        )
+
+                        // Создаём стрелку от последнего блока ветки (или от заголовка если это первый блок ветки)
+                        val sourceBlock = blocks.values
+                            .filter { it.parentIfBlockId == parentIfBlockId && it.branchIndex == branchIndex }
+                            .maxByOrNull { it.position.y } ?: parentBlock
+
+                        blocks[newBlock.id] = newBlock
+                        arrows.add(
+                            ExecutionArrow(
+                                fromBlockId = sourceBlock.id,
+                                toBlockId = newBlock.id,
+                                style = ArrowStyle(
+                                    color = when (branchIndex) {
+                                        0 -> Color(0xFF42A5F5)  // Синий для "да"
+                                        -2 -> Color(0xFF4CAF50) // Зелёный для "иначе"
+                                        else -> Color(0xFFFFA726) // Оранжевый для elif
+                                    },
+                                    thickness = 2.5f,
+                                    arrowheadSize = 10f
+                                )
+                            )
+                        )
+                    }
+                } else if (blockTypeDialogSourceId != null) {
+                    // Обычное продолжение цепочки
+                    val sourceBlock = blocks[blockTypeDialogSourceId!!]
+                    if (sourceBlock != null) {
+                        val newPosition = Offset(
+                            sourceBlock.position.x,
+                            sourceBlock.position.y + sourceBlock.size.height + 40f
+                        )
+
+                        val newContent = when (type) {
+                            is BlockType.Print -> PrintElement()
+                            is BlockType.Variable -> VariableElement()
+                            is BlockType.If -> IfElement()
+                            is BlockType.Return -> ReturnElement()
+                            is BlockType.Function -> FunctionElement()
+                        }
+
+                        val newBlock = Block(
+                            position = newPosition,
+                            blockType = type,
+                            content = newContent
+                        )
+
+                        blocks[sourceBlock.id] = sourceBlock.copy(nextBlockId = newBlock.id)
+                        blocks[newBlock.id] = newBlock
+                        arrows.add(
+                            ExecutionArrow(
+                                fromBlockId = sourceBlock.id,
+                                toBlockId = newBlock.id,
+                                style = ArrowStyle(color = Color(0xFF42A5F5), thickness = 2.5f, arrowheadSize = 10f)
+                            )
+                        )
+                    }
                 }
                 showBlockTypeDialog = false
                 blockTypeDialogSourceId = null
+                blockTypeDialogForBranch = null
             },
             onCancel = {
                 showBlockTypeDialog = false
                 blockTypeDialogSourceId = null
+                blockTypeDialogForBranch = null
             }
         )
     }
 
-    // Диалог настройки условия (сразу после создания условия)
+    // Диалог настройки условия
     if (showIfDialog && ifDialogSourceBlockId != null) {
         val ifBlock = blocks[ifDialogSourceBlockId!!]
         IfDialog(
             initial = ifBlock?.content as? IfElement,
             onConfirm = { content ->
                 blocks[ifDialogSourceBlockId!!] = ifBlock!!.copy(content = content)
-                // СРАЗУ открываем выбор блока для ветки "да"
-                blockTypeDialogSourceId = ifBlock.id
+                // Сразу открываем выбор действия для ветки "да"
+                blockTypeDialogForBranch = Pair(ifBlock.id, 0) // (parentIfBlockId, branchIndex=0 для "да")
                 showBlockTypeDialog = true
                 showIfDialog = false
                 ifDialogSourceBlockId = null
             },
             onCancel = {
-                // Отмена создания условия - удаляем блок условия
+                // Отмена создания условия
                 val ifBlock = blocks[ifDialogSourceBlockId!!]
                 if (ifBlock != null) {
-                    // Находим предыдущий блок и восстанавливаем его связь
                     val prevBlock = blocks.values.find { it.nextBlockId == ifDialogSourceBlockId }
                     if (prevBlock != null) {
                         blocks[prevBlock.id] = prevBlock.copy(nextBlockId = ifBlock.nextBlockId)
                     }
-                    // Удаляем стрелки
                     arrows.removeAll { it.fromBlockId == ifDialogSourceBlockId!! || it.toBlockId == ifDialogSourceBlockId!! }
-                    // Удаляем блок условия
                     blocks.remove(ifDialogSourceBlockId!!)
                 }
                 showIfDialog = false
@@ -1087,7 +1134,7 @@ fun DragWithSelectionBorder() {
     if (showContextMenu && selectedBlockForContextMenu != null) {
         val block = selectedBlockForContextMenu!!
         val hasContinuation = block.nextBlockId != null
-        val isIfHeader = block.blockType is BlockType.If && block.isConditionHeader
+        val isIfHeader = block.blockType is BlockType.If && block.branchIndex == -1 && block.parentIfBlockId == null
         val hasElseBranch = isIfHeader &&
                 blocks.values.any { it.parentIfBlockId == block.id && it.branchIndex == -2 }
 
@@ -1098,12 +1145,12 @@ fun DragWithSelectionBorder() {
             isIfHeader = isIfHeader,
             hasElseBranch = hasElseBranch,
             onContinue = {
-                if (block.blockType !is BlockType.If || !block.isConditionHeader) {
-                    // Обычное продолжение цепочки
+                if (block.blockType !is BlockType.If || block.branchIndex != -1 || block.parentIfBlockId != null) {
+                    // Обычное продолжение
                     blockTypeDialogSourceId = block.id
                     showBlockTypeDialog = true
                 } else {
-                    // Продолжение после заголовка условия - создаём блок условия
+                    // Создание нового условия в основной цепочке
                     val newPosition = Offset(
                         block.position.x,
                         block.position.y + block.size.height + 40f
@@ -1112,9 +1159,7 @@ fun DragWithSelectionBorder() {
                         position = newPosition,
                         blockType = BlockType.If,
                         content = IfElement("x > 0"),
-                        parentIfBlockId = null,
-                        branchIndex = -1,
-                        isConditionHeader = true  // Это заголовок условия
+                        branchIndex = -1  // Заголовок условия
                     )
                     blocks[block.id] = block.copy(nextBlockId = ifBlock.id)
                     blocks[ifBlock.id] = ifBlock
@@ -1138,10 +1183,12 @@ fun DragWithSelectionBorder() {
             },
             onAddElif = if (isIfHeader) {
                 {
-                    // Находим последнюю ветку (максимальный branchIndex)
+                    // Находим последнюю существующую ветку (максимальный branchIndex >= 0)
                     val lastBranchIndex = blocks.values
                         .filter { it.parentIfBlockId == block.id && it.branchIndex >= 0 }
                         .maxOfOrNull { it.branchIndex } ?: -1
+
+                    val newBranchIndex = lastBranchIndex + 1
 
                     // Находим последний блок в последней ветке для позиционирования
                     val lastBlockInLastBranch = blocks.values
@@ -1149,40 +1196,50 @@ fun DragWithSelectionBorder() {
                         .maxByOrNull { it.position.y } ?: block
 
                     // Создаём заголовок для новой ветки elif
-                    val newBranchIndex = lastBranchIndex + 1
                     val elifHeaderBlock = Block(
                         position = Offset(block.position.x, lastBlockInLastBranch.position.y + 80f),
                         blockType = BlockType.If,
                         content = IfElement("условие_$newBranchIndex"),
                         parentIfBlockId = block.id,
-                        branchIndex = newBranchIndex,
-                        isConditionHeader = true  // Это заголовок ветки elif
+                        branchIndex = newBranchIndex  // Это заголовок ветки elif
                     )
                     blocks[elifHeaderBlock.id] = elifHeaderBlock
 
-                    // Создаём стрелку от последней ветки к новой ветке
+                    // Создаём стрелку от последнего блока предыдущей ветки к заголовку новой ветки
                     if (lastBranchIndex >= 0) {
-                        val lastBranchBlocks = blocks.values
+                        val lastBlocks = blocks.values
                             .filter { it.parentIfBlockId == block.id && it.branchIndex == lastBranchIndex }
                             .sortedBy { it.position.y }
-                        if (lastBranchBlocks.isNotEmpty()) {
-                            val lastBlockInBranch = lastBranchBlocks.last()
+                        if (lastBlocks.isNotEmpty()) {
+                            val lastBlock = lastBlocks.last()
                             arrows.add(
                                 ExecutionArrow(
-                                    fromBlockId = lastBlockInBranch.id,
+                                    fromBlockId = lastBlock.id,
                                     toBlockId = elifHeaderBlock.id,
-                                    style = ArrowStyle(color = Color(0xFFFFA726), thickness = 2.0f, arrowheadSize = 8f)  // Оранжевая стрелка для веток
+                                    style = ArrowStyle(color = Color(0xFFFFA726), thickness = 2.0f, arrowheadSize = 8f)
                                 )
                             )
                         }
+                    } else {
+                        // Если нет предыдущих веток, соединяем напрямую с заголовком условия
+                        arrows.add(
+                            ExecutionArrow(
+                                fromBlockId = block.id,
+                                toBlockId = elifHeaderBlock.id,
+                                style = ArrowStyle(color = Color(0xFFFFA726), thickness = 2.0f, arrowheadSize = 8f)
+                            )
+                        )
                     }
 
+                    // Сразу открываем выбор действия для этой ветки
+                    blockTypeDialogForBranch = Pair(block.id, newBranchIndex)
+                    showBlockTypeDialog = true
                     showContextMenu = false
                 }
             } else null,
             onAddElse = if (isIfHeader && !hasElseBranch) {
                 {
-                    // Находим последнюю ветку (максимальный branchIndex)
+                    // Находим последнюю ветку (максимальный branchIndex >= 0)
                     val lastBranchIndex = blocks.values
                         .filter { it.parentIfBlockId == block.id && it.branchIndex >= 0 }
                         .maxOfOrNull { it.branchIndex } ?: -1
@@ -1198,46 +1255,57 @@ fun DragWithSelectionBorder() {
                         blockType = BlockType.If,
                         content = IfElement("иначе"),
                         parentIfBlockId = block.id,
-                        branchIndex = -2,
-                        isConditionHeader = true  // Это заголовок ветки else
+                        branchIndex = -2  // Это заголовок ветки else
                     )
                     blocks[elseHeaderBlock.id] = elseHeaderBlock
 
-                    // Создаём стрелку от последней ветки к ветке else
+                    // Создаём стрелку от последнего блока последней ветки к заголовку else
                     if (lastBranchIndex >= 0) {
-                        val lastBranchBlocks = blocks.values
+                        val lastBlocks = blocks.values
                             .filter { it.parentIfBlockId == block.id && it.branchIndex == lastBranchIndex }
                             .sortedBy { it.position.y }
-                        if (lastBranchBlocks.isNotEmpty()) {
-                            val lastBlockInBranch = lastBranchBlocks.last()
+                        if (lastBlocks.isNotEmpty()) {
+                            val lastBlock = lastBlocks.last()
                             arrows.add(
                                 ExecutionArrow(
-                                    fromBlockId = lastBlockInBranch.id,
+                                    fromBlockId = lastBlock.id,
                                     toBlockId = elseHeaderBlock.id,
-                                    style = ArrowStyle(color = Color(0xFF4CAF50), thickness = 2.0f, arrowheadSize = 8f)  // Зелёная стрелка для else
+                                    style = ArrowStyle(color = Color(0xFF4CAF50), thickness = 2.0f, arrowheadSize = 8f)
                                 )
                             )
                         }
+                    } else {
+                        // Если нет предыдущих веток, соединяем напрямую с заголовком условия
+                        arrows.add(
+                            ExecutionArrow(
+                                fromBlockId = block.id,
+                                toBlockId = elseHeaderBlock.id,
+                                style = ArrowStyle(color = Color(0xFF4CAF50), thickness = 2.0f, arrowheadSize = 8f)
+                            )
+                        )
                     }
 
+                    // Сразу открываем выбор действия для ветки "иначе"
+                    blockTypeDialogForBranch = Pair(block.id, -2)
+                    showBlockTypeDialog = true
                     showContextMenu = false
                 }
             } else null,
             onDelete = {
                 fun deleteWithContinuation(blockId: String) {
                     val currentBlock = blocks[blockId] ?: return
-                    // Сначала удаляем продолжение (если есть)
                     if (currentBlock.nextBlockId != null) {
                         deleteWithContinuation(currentBlock.nextBlockId!!)
                     }
-                    // Удаляем стрелки, связанные с этим блоком
                     arrows.removeAll { it.fromBlockId == blockId || it.toBlockId == blockId }
-                    // Удаляем сам блок
                     blocks.remove(blockId)
-                    // Обновляем предыдущий блок (разрываем связь)
                     val prevBlock = blocks.values.find { it.nextBlockId == blockId }
                     if (prevBlock != null) {
                         blocks[prevBlock.id] = prevBlock.copy(nextBlockId = null)
+                    }
+                    // Также удаляем все ветки условия, если удаляем заголовок
+                    if (currentBlock.blockType is BlockType.If && currentBlock.branchIndex == -1 && currentBlock.parentIfBlockId == null) {
+                        blocks.values.filter { it.parentIfBlockId == blockId }.forEach { deleteWithContinuation(it.id) }
                     }
                 }
                 deleteWithContinuation(block.id)
