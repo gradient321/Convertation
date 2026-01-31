@@ -42,7 +42,7 @@ import kotlin.math.*
 class Data
 
 abstract class Element {
-    var data: Data? = null
+    var data: Data? = null  // ✅ Правильно: имя свойства + двоеточие + тип + инициализация
 }
 
 open class TextElement(var text: String = "") : Element()
