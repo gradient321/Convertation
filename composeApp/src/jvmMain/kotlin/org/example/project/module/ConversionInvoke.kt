@@ -1,7 +1,6 @@
 package org.example.project.module
 
 import org.example.project.api.UResult
-import kotlin.reflect.KClass
 
 //fun <T> invokeModules(input: T) {
 //
@@ -53,10 +52,10 @@ class Bundle<T : Any, H : Any>(
 
 fun main() {
   val bundle = createBundle(
-    Mo.a1,
+    Mo.roundUp,
     Mo.toDouble,
-    Mo.a2.with(ConversionExample(3.0, 2.0)),
-    final = Mo.a1
+    Mo.multiplyAndAdd.with(ConversionExample(3.0, 2.0)),
+    final = Mo.roundUp
   ).unwrap()
   
   println(bundle(4.3))

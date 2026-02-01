@@ -1,6 +1,5 @@
 package org.example.project.module
 
-import com.sun.jdi.Value
 import kotlin.reflect.KClass
 
 abstract class Module(val name: String) {
@@ -21,16 +20,16 @@ abstract class Module(val name: String) {
 }
 
 object Mo : Module("Mo") {
-  val a1 = reg {a: Number -> a.toInt() + 1}
+  val roundUp = reg { a: Number -> a.toInt() + 1}
   
-  val a2 = regws(ConversionExample::convertTo)
+  val multiplyAndAdd = regws(ConversionExample::convertTo)
   
   val toInt = reg {a: Number -> a.toInt()}
   val toDouble = reg {a: Number -> a.toDouble()}
 }
 
 fun main() {
-  Mo.a1
+//  Mo.addOne
 }
 
 
@@ -69,6 +68,9 @@ class ConversionWithSettings<T : Any, H : Any, Settings : ConversionSettings<Val
 
 interface ConversionSettings<V> {
   var value: V
+}
+abstract class ConversionSettingsUseThis<Self> : ConversionSettings<Self> {
+  override var value: Self = (this as Self)
 }
 interface ClassWithInformation {
   fun getDescription(): String
