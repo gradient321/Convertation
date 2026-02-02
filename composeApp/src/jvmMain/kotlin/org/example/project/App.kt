@@ -1,5 +1,4 @@
 package org.example.project
-
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -27,6 +26,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
+import androidx.compose.ui.window.WindowPlacement
+import androidx.compose.ui.window.WindowPosition
+import androidx.compose.ui.window.WindowSize
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.graphics.Path
 import java.awt.Toolkit
@@ -36,7 +38,6 @@ import kotlin.math.*
 
 // ===== ЭЛЕМЕНТЫ =====
 abstract class Element
-
 sealed class BlockType {
     object Function : BlockType()
     object Print : BlockType()
@@ -95,6 +96,7 @@ private val DefaultBlockColors = mapOf(
 private const val BlockWidth = 180f
 private const val BlockHeight = 70f
 private const val BlockSpacingY = 50f
+private const val BranchSpacingY = 65f
 private const val BranchOffsetX = 70f
 
 // ===== МОДЕЛЬ БЛОКА =====
@@ -106,7 +108,7 @@ data class Block(
     val content: Element,
     val nextBlockId: String? = null,
     val parentIfBlockId: String? = null,
-    val branchIndex: Int = -1
+    val branchIndex: Int = -1  // -1 = основной блок, 0 = ветка "да", >0 = elif, -2 = else
 )
 
 // ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
@@ -116,26 +118,130 @@ private fun getBottomCenter(blockPos: Offset, blockSize: Size): Offset =
 private fun getTopCenter(blockPos: Offset, blockSize: Size): Offset =
     Offset(blockPos.x + blockSize.width / 2f, blockPos.y)
 
+// Пересчёт позиций всех блоков функции после изменений
+private fun recalculateBlockPositions(blocks: MutableMap<String, Block>, arrows: MutableList<ExecutionArrow>) {
+    // Находим корневой блок функции (первый блок без родителя)
+    val rootBlock = blocks.values.firstOrNull { it.parentIfBlockId == null && it.branchIndex == -1 } ?: return
+
+    // Собираем все блоки основной цепочки
+    val mainChain = mutableListOf<Block>()
+    var currentId: String? = rootBlock.id
+    while (currentId != null) {
+        val block = blocks[currentId] ?: break
+        mainChain.add(block)
+        currentId = block.nextBlockId
+    }
+
+    // Пересчитываем позиции основной цепочки
+    var currentY = rootBlock.position.y
+    for (i in mainChain.indices) {
+        val block = mainChain[i]
+        blocks[block.id] = block.copy(position = Offset(100f, currentY))
+
+        // Обработка веток условия
+        if (block.blockType is BlockType.If && block.branchIndex == -1 && block.parentIfBlockId == null) {
+            // Собираем все ветки условия
+            val branches = blocks.values
+                .filter { it.parentIfBlockId == block.id }
+                .groupBy { it.branchIndex }
+                .toSortedMap(compareBy { if (it == -2) Int.MAX_VALUE else it }) // else в конце
+
+            var maxBranchEndY = currentY + block.size.height
+
+            // Обрабатываем каждую ветку
+            for ((branchIndex, branchBlocks) in branches) {
+                val sortedBranch = branchBlocks.sortedBy { it.position.y }
+                var branchY = currentY + block.size.height + BranchSpacingY
+
+                for (branchBlock in sortedBranch) {
+                    val newX = when (branchIndex) {
+                        0 -> block.position.x + BranchOffsetX          // ветка "да" - справа
+                        -2 -> block.position.x - BranchOffsetX * 2.5f  // else - слева
+                        else -> block.position.x + BranchOffsetX * (1.5f + branchIndex * 2.0f) // КАЖДЫЙ elif правее предыдущего с увеличенным расстоянием
+                    }
+                    blocks[branchBlock.id] = branchBlock.copy(position = Offset(newX, branchY))
+                    branchY += branchBlock.size.height + BlockSpacingY
+                }
+
+                if (branchY > maxBranchEndY) {
+                    maxBranchEndY = branchY
+                }
+            }
+
+            currentY = maxBranchEndY
+        } else {
+            currentY += block.size.height + BlockSpacingY
+        }
+    }
+
+    // Пересоздаём стрелки
+    arrows.clear()
+
+    // Стрелки основной цепочки
+    for (i in 0 until mainChain.size - 1) {
+        arrows.add(ExecutionArrow(
+            fromBlockId = mainChain[i].id,
+            toBlockId = mainChain[i + 1].id,
+            style = ArrowStyle(color = Color(0xFF42A5F5))
+        ))
+    }
+
+    // Стрелки для веток условий
+    for (block in mainChain) {
+        if (block.blockType is BlockType.If && block.branchIndex == -1 && block.parentIfBlockId == null) {
+            val branches = blocks.values
+                .filter { it.parentIfBlockId == block.id }
+                .groupBy { it.branchIndex }
+                .toSortedMap()
+
+            for ((branchIndex, branchBlocks) in branches) {
+                val sortedBranch = branchBlocks.sortedBy { it.position.y }
+                if (sortedBranch.isNotEmpty()) {
+                    // Стрелка от заголовка условия к первой ветке
+                    arrows.add(ExecutionArrow(
+                        fromBlockId = block.id,
+                        toBlockId = sortedBranch.first().id,
+                        style = ArrowStyle(color = when (branchIndex) {
+                            0 -> Color(0xFF42A5F5)
+                            -2 -> Color(0xFF4CAF50)
+                            else -> Color(0xFFFFA726)
+                        })
+                    ))
+
+                    // Стрелки внутри ветки
+                    for (i in 0 until sortedBranch.size - 1) {
+                        arrows.add(ExecutionArrow(
+                            fromBlockId = sortedBranch[i].id,
+                            toBlockId = sortedBranch[i + 1].id,
+                            style = ArrowStyle(color = when (branchIndex) {
+                                0 -> Color(0xFF42A5F5)
+                                -2 -> Color(0xFF4CAF50)
+                                else -> Color(0xFFFFA726)
+                            })
+                        ))
+                    }
+                }
+            }
+        }
+    }
+}
+
 private fun exportBlocksToPython(blocks: Map<String, Block>, arrows: List<ExecutionArrow>): String {
     if (blocks.isEmpty()) return "# Нет блоков для экспорта"
-    
     // Находим ПЕРВЫЙ блок (у которого нет входящей стрелки И который не является веткой условия)
     val allTargetIds = arrows.map { it.toBlockId }.toSet()
     val firstBlock = blocks.values.firstOrNull {
         it.id !in allTargetIds && it.parentIfBlockId == null && it.branchIndex == -1
     } ?: return "# Ошибка: не найден начальный блок"
-    
     val visited = mutableSetOf<String>()
     val lines = mutableListOf<String>()
     val indentStep = "    "
-    
+
     fun traverse(blockId: String, indentLevel: Int = 0): Boolean {
         if (blockId !in blocks || blockId in visited) return false
         visited.add(blockId)
-        
         val block = blocks[blockId]!!
         val indent = indentStep.repeat(indentLevel)
-        
         when (block.blockType) {
             is BlockType.Function -> {
                 val func = block.content as FunctionElement
@@ -149,7 +255,6 @@ private fun exportBlocksToPython(blocks: Map<String, Block>, arrows: List<Execut
                 lines.add("")
                 return true
             }
-            
             is BlockType.Print -> {
                 val print = block.content as PrintElement
                 val stmt = if (print.newLine)
@@ -158,18 +263,15 @@ private fun exportBlocksToPython(blocks: Map<String, Block>, arrows: List<Execut
                     "print(${print.text}, end='')"
                 lines.add("${indent}${stmt}")
             }
-            
             is BlockType.Variable -> {
                 val varEl = block.content as VariableElement
                 val value = if (varEl.value.isEmpty()) "" else " = ${varEl.value}"
                 lines.add("${indent}${varEl.name}${value}")
             }
-            
             is BlockType.If -> {
                 if (block.branchIndex == -1 && block.parentIfBlockId == null) {
                     val ifEl = block.content as IfElement
                     lines.add("${indent}if ${ifEl.condition}:")
-                    
                     // Ветка "да" (branchIndex = 0)
                     val trueBranch = blocks.values
                         .firstOrNull { it.parentIfBlockId == block.id && it.branchIndex == 0 }
@@ -178,16 +280,13 @@ private fun exportBlocksToPython(blocks: Map<String, Block>, arrows: List<Execut
                     } else {
                         lines.add("${indent}${indentStep}pass")
                     }
-                    
                     // Ветки elif
                     val elifBranches = blocks.values
                         .filter { it.parentIfBlockId == block.id && it.branchIndex > 0 }
                         .sortedBy { it.branchIndex }
-                    
                     for (elifHeader in elifBranches) {
                         val elifCond = (elifHeader.content as IfElement).condition
                         lines.add("${indent}elif ${elifCond}:")
-                        
                         val elifBody = blocks.values
                             .firstOrNull { it.parentIfBlockId == block.id && it.branchIndex == elifHeader.branchIndex && it.id != elifHeader.id }
                         if (elifBody != null) {
@@ -196,7 +295,6 @@ private fun exportBlocksToPython(blocks: Map<String, Block>, arrows: List<Execut
                             lines.add("${indent}${indentStep}pass")
                         }
                     }
-                    
                     // Ветка else
                     val elseHeader = blocks.values
                         .firstOrNull { it.parentIfBlockId == block.id && it.branchIndex == -2 }
@@ -210,7 +308,6 @@ private fun exportBlocksToPython(blocks: Map<String, Block>, arrows: List<Execut
                             lines.add("${indent}${indentStep}pass")
                         }
                     }
-                    
                     // Продолжение основной цепочки
                     if (block.nextBlockId != null) {
                         traverse(block.nextBlockId, indentLevel)
@@ -247,30 +344,24 @@ private fun exportBlocksToPython(blocks: Map<String, Block>, arrows: List<Execut
                             }
                         }
                     }
-                    
                     if (block.nextBlockId != null) {
                         traverse(block.nextBlockId!!, indentLevel)
                     }
                     return true
                 }
             }
-            
             is BlockType.Return -> {
                 val ret = block.content as ReturnElement
                 val value = if (ret.value.isEmpty()) "" else " ${ret.value}"
                 lines.add("${indent}return${value}")
             }
         }
-        
         if (block.nextBlockId != null) {
             traverse(block.nextBlockId!!, indentLevel)
         }
-        
         return true
     }
-    
     traverse(firstBlock.id)
-    
     // Добавляем точку входа если нет функций верхнего уровня
     if (lines.isNotEmpty() && !lines.any { it.startsWith("def ") && !it.startsWith("    ") }) {
         val indentedLines = lines.map { "    $it" }
@@ -281,7 +372,6 @@ private fun exportBlocksToPython(blocks: Map<String, Block>, arrows: List<Execut
         lines.add("if __name__ == \"__main__\":")
         lines.add("    main()")
     }
-    
     return lines.joinToString("\n").trimEnd()
 }
 
@@ -290,12 +380,11 @@ fun importPythonToBlocks(code: String): Pair<Map<String, Block>, List<ExecutionA
     val blocks = mutableMapOf<String, Block>()
     val arrows = mutableListOf<ExecutionArrow>()
     val lines = code.lines().map { it.trimEnd() }
-    
     var currentY = 100f
     var lastBlockId: String? = null
     var indentStack = mutableListOf<Pair<Int, String>>()
     var ifStack = mutableListOf<Pair<String, Int>>() // (ifBlockId, currentBranchIndex)
-    
+
     fun createBlock(
         blockType: BlockType,
         content: Element,
@@ -317,11 +406,11 @@ fun importPythonToBlocks(code: String): Pair<Map<String, Block>, List<ExecutionA
         currentY += BlockHeight + BlockSpacingY
         return block
     }
-    
+
     fun connect(fromId: String, toId: String, color: Color = Color(0xFF42A5F5)) {
         arrows.add(ExecutionArrow(fromBlockId = fromId, toBlockId = toId, style = ArrowStyle(color = color)))
     }
-    
+
     var i = 0
     while (i < lines.size) {
         val line = lines[i].trim()
@@ -329,15 +418,12 @@ fun importPythonToBlocks(code: String): Pair<Map<String, Block>, List<ExecutionA
             i++
             continue
         }
-        
         val rawLine = lines[i]
         val indentSpaces = rawLine.takeWhile { it == ' ' }.length
         val indentLevel = indentSpaces / 4
-        
         // Очистка стеков от более глубоких уровней
         indentStack.removeAll { it.first >= indentLevel }
         ifStack.removeAll { indentStack.none { s -> s.first == indentLevel - 1 } }
-        
         when {
             line.startsWith("def ") -> {
                 val match = Regex("""def\s+(\w+)\s*\(([^)]*)\)""").find(line)
@@ -359,7 +445,6 @@ fun importPythonToBlocks(code: String): Pair<Map<String, Block>, List<ExecutionA
                     currentY += 20f
                 }
             }
-            
             line.startsWith("if ") -> {
                 val cond = line.removePrefix("if ").removeSuffix(":").trim()
                 val block = createBlock(
@@ -378,18 +463,18 @@ fun importPythonToBlocks(code: String): Pair<Map<String, Block>, List<ExecutionA
                 indentStack.add(Pair(indentLevel, block.id))
                 ifStack.add(Pair(block.id, 0)) // Начинаем ветку "да"
             }
-            
             line.startsWith("elif ") -> {
                 if (ifStack.isNotEmpty()) {
                     val (ifBlockId, _) = ifStack.last()
                     val cond = line.removePrefix("elif ").removeSuffix(":").trim()
+                    val elifIndex = ifStack.last().second + 1
                     val block = createBlock(
                         BlockType.If,
                         IfElement(cond),
-                        x = 100f + BranchOffsetX * 1.5f,
+                        x = 100f + BranchOffsetX * (1.5f + elifIndex * 2.0f),  // УВЕЛИЧЕННОЕ расстояние между elif
                         y = currentY,
                         parentIfBlockId = ifBlockId,
-                        branchIndex = ifStack.last().second + 1
+                        branchIndex = elifIndex
                     )
                     // Соединяем с предыдущей веткой
                     val prevBranchBlocks = blocks.values
@@ -402,35 +487,25 @@ fun importPythonToBlocks(code: String): Pair<Map<String, Block>, List<ExecutionA
                         connect(ifBlockId, block.id, Color(0xFFFFA726))
                     }
                     lastBlockId = block.id
-                    ifStack[ifStack.lastIndex] = Pair(ifBlockId, ifStack.last().second + 1)
+                    ifStack[ifStack.lastIndex] = Pair(ifBlockId, elifIndex)
                 }
             }
-            
             line.startsWith("else:") -> {
                 if (ifStack.isNotEmpty()) {
-                    val (ifBlockId, lastBranchIndex) = ifStack.last()
+                    val (ifBlockId, _) = ifStack.last()
                     val block = createBlock(
                         BlockType.If,
                         IfElement("else"),
-                        x = 100f + BranchOffsetX * 2.5f,
+                        x = 100f - BranchOffsetX * 2.5f,  // else СЛЕВА!
                         y = currentY,
                         parentIfBlockId = ifBlockId,
                         branchIndex = -2
                     )
-                    // Соединяем с последней веткой
-                    val prevBranchBlocks = blocks.values
-                        .filter { it.parentIfBlockId == ifBlockId && it.branchIndex == lastBranchIndex }
-                        .sortedBy { it.position.y }
-                    if (prevBranchBlocks.isNotEmpty()) {
-                        val lastInPrev = prevBranchBlocks.last()
-                        connect(lastInPrev.id, block.id, Color(0xFF4CAF50))
-                    } else {
-                        connect(ifBlockId, block.id, Color(0xFF4CAF50))
-                    }
+                    // СТРЕЛКА НАПРЯМУЮ ОТ РОДИТЕЛЬСКОГО IF
+                    connect(ifBlockId, block.id, Color(0xFF4CAF50))
                     lastBlockId = block.id
                 }
             }
-            
             line.startsWith("print(") -> {
                 val content = line.removePrefix("print(").removeSuffix(")").trim()
                 var newLine = true
@@ -465,7 +540,6 @@ fun importPythonToBlocks(code: String): Pair<Map<String, Block>, List<ExecutionA
                 lastBlockId = block.id
                 indentStack.add(Pair(indentLevel, block.id))
             }
-            
             line.contains("=") && !line.startsWith("if") && !line.startsWith("def") && !line.startsWith("while") && !line.startsWith("for") && !line.startsWith("elif") && !line.startsWith("else") -> {
                 val parts = line.split("=", limit = 2)
                 val name = parts[0].trim()
@@ -502,7 +576,6 @@ fun importPythonToBlocks(code: String): Pair<Map<String, Block>, List<ExecutionA
                 lastBlockId = block.id
                 indentStack.add(Pair(indentLevel, block.id))
             }
-            
             line.startsWith("return") -> {
                 val value = line.removePrefix("return").trim()
                 val block = createBlock(
@@ -532,10 +605,12 @@ fun importPythonToBlocks(code: String): Pair<Map<String, Block>, List<ExecutionA
                 indentStack.add(Pair(indentLevel, block.id))
             }
         }
-        
         i++
     }
-    
+
+    // Пересчитываем позиции после импорта
+    recalculateBlockPositions(blocks, arrows)
+
     return blocks to arrows
 }
 
@@ -560,7 +635,6 @@ fun BlockComponent(
         blockType is BlockType.Return -> "Возврат"
         else -> "блок"
     }
-    
     val details = when (content) {
         is FunctionElement -> "${content.name}(${content.parameters})"
         is PrintElement -> content.text
@@ -569,7 +643,6 @@ fun BlockComponent(
         is ReturnElement -> if (content.value.isEmpty()) "ничего" else content.value
         else -> "блок"
     }
-    
     Box(
         modifier = Modifier
             .offset { androidx.compose.ui.unit.IntOffset(position.x.toInt(), position.y.toInt()) }
@@ -605,6 +678,7 @@ fun BlockComponent(
 @Composable
 fun ArrowComponent(start: Offset, end: Offset, style: ArrowStyle) {
     Canvas(modifier = Modifier.fillMaxSize()) {
+        // Прямая стрелка
         drawLine(
             color = style.color,
             start = start,
@@ -612,7 +686,6 @@ fun ArrowComponent(start: Offset, end: Offset, style: ArrowStyle) {
             strokeWidth = style.thickness,
             cap = StrokeCap.Round
         )
-        
         val arrowheadSize = style.arrowheadSize
         val angle = atan2(end.y - start.y, end.x - start.x)
         val arrowSideAngle = PI / 6
@@ -684,7 +757,7 @@ fun BlockContextMenu(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .clickable { onClose() }
+            .clickable(onClick = onClose)  // Закрытие при клике вне меню
     ) {
         Box(
             modifier = Modifier
@@ -698,7 +771,6 @@ fun BlockContextMenu(
         ) {
             Text(text = "×", fontSize = 24.sp, color = Color(0xFF616161), fontWeight = FontWeight.Bold)
         }
-        
         Box(
             modifier = Modifier
                 .offset { androidx.compose.ui.unit.IntOffset(position.x.toInt(), position.y.toInt()) }
@@ -733,7 +805,6 @@ fun BlockContextMenu(
                         modifier = Modifier.padding(start = 10.dp)
                     )
                 }
-                
                 MenuItemButton(
                     icon = "➡️",
                     text = "Продолжить цепочку",
@@ -741,7 +812,6 @@ fun BlockContextMenu(
                     iconColor = Color(0xFF1976D2),
                     onClick = { onContinue(); onClose() }
                 )
-                
                 MenuItemButton(
                     icon = "✏️",
                     text = "Редактировать",
@@ -749,7 +819,6 @@ fun BlockContextMenu(
                     iconColor = Color(0xFF2196F3),
                     onClick = { onEdit(); onClose() }
                 )
-                
                 if (isIfHeader) {
                     MenuItemButton(
                         icon = "➕",
@@ -768,7 +837,6 @@ fun BlockContextMenu(
                         )
                     }
                 }
-                
                 MenuItemButton(
                     icon = "🗑️",
                     text = if (hasContinuation) "Удалить с продолжением" else "Удалить блок",
@@ -782,10 +850,13 @@ fun BlockContextMenu(
 }
 
 @Composable
-fun CreateFunctionDialog(onConfirm: (String, String) -> Unit, onCancel: () -> Unit) {
+fun CreateFunctionDialog(
+    initialPosition: Offset? = null,
+    onConfirm: (String, String, Offset) -> Unit,
+    onCancel: () -> Unit
+) {
     var name by remember { mutableStateOf("new_function") }
     var params by remember { mutableStateOf("a: int, b: str") }
-    
     Dialog(onDismissRequest = onCancel) {
         Surface(shape = RoundedCornerShape(16.dp), tonalElevation = 12.dp) {
             Column(
@@ -800,7 +871,6 @@ fun CreateFunctionDialog(onConfirm: (String, String) -> Unit, onCancel: () -> Un
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF6A1B9A)
                 )
-                
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it.filter { c -> c.isLetterOrDigit() || c == '_' } },
@@ -808,7 +878,6 @@ fun CreateFunctionDialog(onConfirm: (String, String) -> Unit, onCancel: () -> Un
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text)
                 )
-                
                 OutlinedTextField(
                     value = params,
                     onValueChange = { params = it },
@@ -816,7 +885,6 @@ fun CreateFunctionDialog(onConfirm: (String, String) -> Unit, onCancel: () -> Un
                     singleLine = false,
                     maxLines = 2
                 )
-                
                 Row(
                     modifier = Modifier.align(Alignment.End),
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -829,7 +897,7 @@ fun CreateFunctionDialog(onConfirm: (String, String) -> Unit, onCancel: () -> Un
                         Text("Отмена", fontSize = 16.sp)
                     }
                     Button(
-                        onClick = { if (name.isNotBlank()) onConfirm(name, params) },
+                        onClick = { if (name.isNotBlank()) onConfirm(name, params, initialPosition ?: Offset(100f, 100f)) },
                         enabled = name.isNotBlank(),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6A1B9A)),
                         modifier = Modifier.width(120.dp)
@@ -846,7 +914,6 @@ fun CreateFunctionDialog(onConfirm: (String, String) -> Unit, onCancel: () -> Un
 fun PrintDialog(initial: PrintElement?, onConfirm: (Element) -> Unit, onCancel: () -> Unit) {
     var text by remember { mutableStateOf(initial?.text ?: "\"Hello\"") }
     var newLine by remember { mutableStateOf(initial?.newLine ?: true) }
-    
     Dialog(onDismissRequest = onCancel) {
         Surface(shape = RoundedCornerShape(16.dp), tonalElevation = 12.dp) {
             Column(
@@ -861,7 +928,6 @@ fun PrintDialog(initial: PrintElement?, onConfirm: (Element) -> Unit, onCancel: 
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF0288D1)
                 )
-                
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
@@ -869,12 +935,10 @@ fun PrintDialog(initial: PrintElement?, onConfirm: (Element) -> Unit, onCancel: 
                     singleLine = false,
                     maxLines = 3
                 )
-                
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = newLine, onCheckedChange = { newLine = it })
                     Text("Переносить на новую строку после вывода")
                 }
-                
                 Row(
                     modifier = Modifier.align(Alignment.End),
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -906,7 +970,6 @@ fun VariableDialog(initial: VariableElement?, onConfirm: (Element) -> Unit, onCa
     var value by remember { mutableStateOf(initial?.value ?: "0") }
     val types = listOf("int", "float", "str", "bool")
     var expanded by remember { mutableStateOf(false) }
-    
     Dialog(onDismissRequest = onCancel) {
         Surface(shape = RoundedCornerShape(16.dp), tonalElevation = 12.dp) {
             Column(
@@ -921,7 +984,6 @@ fun VariableDialog(initial: VariableElement?, onConfirm: (Element) -> Unit, onCa
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF2E7D32)
                 )
-                
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it.filter { c -> c.isLetterOrDigit() || c == '_' } },
@@ -929,7 +991,6 @@ fun VariableDialog(initial: VariableElement?, onConfirm: (Element) -> Unit, onCa
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text)
                 )
-                
                 Box {
                     Button(
                         onClick = { expanded = true },
@@ -979,14 +1040,12 @@ fun VariableDialog(initial: VariableElement?, onConfirm: (Element) -> Unit, onCa
                         }
                     }
                 }
-                
                 OutlinedTextField(
                     value = value,
                     onValueChange = { value = it },
                     label = { Text("Значение") },
                     singleLine = true
                 )
-                
                 Row(
                     modifier = Modifier.align(Alignment.End),
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -1018,7 +1077,6 @@ fun IfDialog(
     onCancel: () -> Unit
 ) {
     var condition by remember { mutableStateOf(initial?.condition ?: "x > 0") }
-    
     Dialog(onDismissRequest = onCancel) {
         Surface(shape = RoundedCornerShape(16.dp), tonalElevation = 12.dp) {
             Column(
@@ -1033,7 +1091,6 @@ fun IfDialog(
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFFC62828)
                 )
-                
                 OutlinedTextField(
                     value = condition,
                     onValueChange = { condition = it },
@@ -1041,7 +1098,6 @@ fun IfDialog(
                     singleLine = false,
                     maxLines = 2
                 )
-                
                 Row(
                     modifier = Modifier.align(Alignment.End),
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -1069,7 +1125,6 @@ fun IfDialog(
 @Composable
 fun ReturnDialog(initial: ReturnElement?, onConfirm: (Element) -> Unit, onCancel: () -> Unit) {
     var value by remember { mutableStateOf(initial?.value ?: "") }
-    
     Dialog(onDismissRequest = onCancel) {
         Surface(shape = RoundedCornerShape(16.dp), tonalElevation = 12.dp) {
             Column(
@@ -1084,7 +1139,6 @@ fun ReturnDialog(initial: ReturnElement?, onConfirm: (Element) -> Unit, onCancel
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF5D4037)
                 )
-                
                 OutlinedTextField(
                     value = value,
                     onValueChange = { value = it },
@@ -1092,7 +1146,6 @@ fun ReturnDialog(initial: ReturnElement?, onConfirm: (Element) -> Unit, onCancel
                     singleLine = false,
                     maxLines = 2
                 )
-                
                 Row(
                     modifier = Modifier.align(Alignment.End),
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -1144,7 +1197,6 @@ fun BlockTypeSelectionDialog(
                     color = Color(0xFF1976D2),
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
-                
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     types.forEach { (type, label) ->
                         val color = DefaultBlockColors[type] ?: Color(0xFF1976D2)
@@ -1160,7 +1212,6 @@ fun BlockTypeSelectionDialog(
                         }
                     }
                 }
-                
                 Button(
                     onClick = onCancel,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFBDBDBD)),
@@ -1213,9 +1264,7 @@ fun CodePreviewDialog(
                         }
                     }
                 }
-                
                 Spacer(modifier = Modifier.height(12.dp))
-                
                 Surface(
                     shape = RoundedCornerShape(8.dp),
                     color = Color(0xFF1E1E1E),
@@ -1249,9 +1298,7 @@ fun CodePreviewDialog(
                         }
                     }
                 }
-                
                 Spacer(modifier = Modifier.height(16.dp))
-                
                 Button(
                     onClick = onDismiss,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2)),
@@ -1273,7 +1320,7 @@ fun DragWithSelectionBorder() {
     var zoom by remember { mutableStateOf(1f) }
     var selectedBlockId by remember { mutableStateOf<String?>(null) }
     var showCreateFunctionDialog by remember { mutableStateOf(false) }
-    var createPosition by remember { mutableStateOf(Offset.Zero) }
+    var createFunctionPosition by remember { mutableStateOf<Offset?>(null) }
     var showContextMenu by remember { mutableStateOf(false) }
     var contextMenuPosition by remember { mutableStateOf(Offset.Zero) }
     var selectedBlockForContextMenu by remember { mutableStateOf<Block?>(null) }
@@ -1292,10 +1339,13 @@ fun DragWithSelectionBorder() {
     result = a + b
     if result > 0:
         print("Положительный результат")
+    elif result == 0:
+        print("Ноль")
+    elif result < 0:
+        print("Отрицательный результат")
     else:
-        print("Неположительный результат")
+        print("Ошибка")
     return result
-
 if __name__ == "__main__":
     x = 10
     y = 20
@@ -1304,7 +1354,7 @@ if __name__ == "__main__":
     ) }
     var isPanning by remember { mutableStateOf(false) }
     var panStart by remember { mutableStateOf(Offset.Zero) }
-    
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -1313,25 +1363,22 @@ if __name__ == "__main__":
                 awaitPointerEventScope {
                     while (true) {
                         val event = awaitPointerEvent()
-                        
                         when (event.type) {
                             PointerEventType.Press -> {
                                 val position = event.changes.first().position
                                 val isRightClick = event.buttons.isSecondaryPressed
                                 val isLeftClick = event.buttons.isPrimaryPressed
-                                
                                 if (isRightClick) {
-                                    // Правый клик — контекстное меню
+                                    // Правый клик — контекстное меню или создание функции
                                     var clickedBlock: Block? = null
                                     for (block in blocks.values) {
                                         val displayPos = when {
                                             block.branchIndex == 0 -> Offset(block.position.x + BranchOffsetX, block.position.y)
-                                            block.branchIndex > 0 -> Offset(block.position.x + BranchOffsetX * 1.5f, block.position.y)
-                                            block.branchIndex == -2 -> Offset(block.position.x + BranchOffsetX * 2.5f, block.position.y)
+                                            block.branchIndex > 0 -> Offset(block.position.x + BranchOffsetX * (1.5f + block.branchIndex * 2.0f), block.position.y)
+                                            block.branchIndex == -2 -> Offset(block.position.x - BranchOffsetX * 2.5f, block.position.y)
                                             else -> block.position
                                         }
                                         val screenPos = Offset(displayPos.x - cameraX, displayPos.y - cameraY)
-                                        
                                         if (position.x >= screenPos.x &&
                                             position.x <= screenPos.x + block.size.width &&
                                             position.y >= screenPos.y &&
@@ -1340,15 +1387,17 @@ if __name__ == "__main__":
                                             break
                                         }
                                     }
-                                    
                                     if (clickedBlock != null) {
                                         selectedBlockForContextMenu = clickedBlock
                                         contextMenuPosition = position
                                         showContextMenu = true
                                     } else {
+                                        // Клик по пустому месту — создать функцию В ТОЧКЕ КЛИКА
+                                        val worldX = (position.x + cameraX) / zoom
+                                        val worldY = (position.y + cameraY) / zoom
+                                        createFunctionPosition = Offset(worldX, worldY)
                                         showCreateFunctionDialog = true
                                     }
-                                    
                                     event.changes.forEach { it.consume() }
                                 } else if (isLeftClick && !showContextMenu && !showCreateFunctionDialog) {
                                     // Левый клик — проверяем попадание в блок
@@ -1356,12 +1405,11 @@ if __name__ == "__main__":
                                     for (block in blocks.values) {
                                         val displayPos = when {
                                             block.branchIndex == 0 -> Offset(block.position.x + BranchOffsetX, block.position.y)
-                                            block.branchIndex > 0 -> Offset(block.position.x + BranchOffsetX * 1.5f, block.position.y)
-                                            block.branchIndex == -2 -> Offset(block.position.x + BranchOffsetX * 2.5f, block.position.y)
+                                            block.branchIndex > 0 -> Offset(block.position.x + BranchOffsetX * (1.5f + block.branchIndex * 2.0f), block.position.y)
+                                            block.branchIndex == -2 -> Offset(block.position.x - BranchOffsetX * 2.5f, block.position.y)
                                             else -> block.position
                                         }
                                         val screenPos = Offset(displayPos.x - cameraX, displayPos.y - cameraY)
-                                        
                                         if (position.x >= screenPos.x &&
                                             position.x <= screenPos.x + block.size.width &&
                                             position.y >= screenPos.y &&
@@ -1370,24 +1418,21 @@ if __name__ == "__main__":
                                             break
                                         }
                                     }
-                                    
                                     if (clickedBlock != null) {
                                         selectedBlockId = clickedBlock.id
                                     } else {
-                                        // Начинаем панорамирование
+                                        // Начинаем панорамирование и скрываем меню
                                         isPanning = true
                                         panStart = position
+                                        showContextMenu = false
                                     }
-                                    
                                     event.changes.forEach { it.consume() }
                                 }
                             }
-                            
                             PointerEventType.Release -> {
                                 isPanning = false
                                 event.changes.forEach { it.consume() }
                             }
-                            
                             PointerEventType.Move -> {
                                 if (isPanning) {
                                     val position = event.changes.first().position
@@ -1398,31 +1443,25 @@ if __name__ == "__main__":
                                     event.changes.forEach { it.consume() }
                                 }
                             }
-                            
                             PointerEventType.Scroll -> {
                                 if (showCreateFunctionDialog || showEditDialog || showContextMenu ||
                                     showBlockTypeDialog || showIfDialog || showCodePreview || showImportDialog) {
                                     continue
                                 }
-                                
                                 val delta = event.changes.first().scrollDelta.y
                                 if (delta != 0f) {
                                     val oldZoom = zoom
                                     zoom = (zoom * (1f - delta * 0.1f)).coerceIn(0.3f, 3f)
-                                    
                                     // Фокусировка на курсоре мыши при масштабировании
                                     val mousePos = event.changes.first().position
                                     val worldBefore = Offset(mousePos.x + cameraX, mousePos.y + cameraY) / oldZoom
                                     val worldAfter = Offset(mousePos.x + cameraX, mousePos.y + cameraY) / zoom
                                     val diff = (worldAfter - worldBefore) * zoom
-                                    
                                     cameraX += diff.x
                                     cameraY += diff.y
-                                    
                                     event.changes.forEach { it.consume() }
                                 }
                             }
-                            
                             else -> {}
                         }
                     }
@@ -1436,20 +1475,19 @@ if __name__ == "__main__":
             if (source != null && target != null) {
                 val sourcePos = when {
                     source.branchIndex == 0 -> Offset(source.position.x + BranchOffsetX, source.position.y)
-                    source.branchIndex > 0 -> Offset(source.position.x + BranchOffsetX * 1.5f, source.position.y)
-                    source.branchIndex == -2 -> Offset(source.position.x + BranchOffsetX * 2.5f, source.position.y)
+                    source.branchIndex > 0 -> Offset(source.position.x + BranchOffsetX * (1.5f + source.branchIndex * 2.0f), source.position.y)
+                    source.branchIndex == -2 -> Offset(source.position.x - BranchOffsetX * 2.5f, source.position.y)
                     else -> source.position
                 }
                 val targetPos = when {
                     target.branchIndex == 0 -> Offset(target.position.x + BranchOffsetX, target.position.y)
-                    target.branchIndex > 0 -> Offset(target.position.x + BranchOffsetX * 1.5f, target.position.y)
-                    target.branchIndex == -2 -> Offset(target.position.x + BranchOffsetX * 2.5f, target.position.y)
+                    target.branchIndex > 0 -> Offset(target.position.x + BranchOffsetX * (1.5f + target.branchIndex * 2.0f), target.position.y)
+                    target.branchIndex == -2 -> Offset(target.position.x - BranchOffsetX * 2.5f, target.position.y)
                     else -> target.position
                 }
-                
                 val start = getBottomCenter(sourcePos, source.size)
                 val end = getTopCenter(targetPos, target.size)
-                
+
                 ArrowComponent(
                     start = Offset(start.x - cameraX, start.y - cameraY),
                     end = Offset(end.x - cameraX, end.y - cameraY),
@@ -1457,16 +1495,15 @@ if __name__ == "__main__":
                 )
             }
         }
-        
+
         // Блоки
         blocks.values.forEach { block ->
             val displayPosition = when {
                 block.branchIndex == 0 -> Offset(block.position.x + BranchOffsetX, block.position.y)
-                block.branchIndex > 0 -> Offset(block.position.x + BranchOffsetX * 1.5f, block.position.y)
-                block.branchIndex == -2 -> Offset(block.position.x + BranchOffsetX * 2.5f, block.position.y)
+                block.branchIndex > 0 -> Offset(block.position.x + BranchOffsetX * (1.5f + block.branchIndex * 2.0f), block.position.y)
+                block.branchIndex == -2 -> Offset(block.position.x - BranchOffsetX * 2.5f, block.position.y)
                 else -> block.position
             }
-            
             BlockComponent(
                 position = Offset(displayPosition.x - cameraX, displayPosition.y - cameraY),
                 size = block.size,
@@ -1476,7 +1513,7 @@ if __name__ == "__main__":
                 branchIndex = block.branchIndex
             )
         }
-        
+
         // Панель инструментов
         Box(
             modifier = Modifier
@@ -1498,16 +1535,17 @@ if __name__ == "__main__":
                         fontWeight = FontWeight.Bold,
                         color = Color.White
                     )
-                    
                     Button(
                         onClick = {
-                            val newY = blocks.values.maxOfOrNull { it.position.y + it.size.height }?.plus(60f) ?: 100f
-                            val newBlock = Block(
-                                position = Offset(100f, newY),
-                                blockType = BlockType.Function,
-                                content = FunctionElement("new_function", "a: int, b: str")
-                            )
-                            blocks[newBlock.id] = newBlock
+                            // Создание функции в центре видимой области
+                            val windowWidth = 1280f // Примерная ширина окна
+                            val windowHeight = 720f // Примерная высота окна
+                            val centerX = windowWidth / 2f
+                            val centerY = windowHeight / 2f
+                            val worldX = (centerX + cameraX) / zoom
+                            val worldY = (centerY + cameraY) / zoom
+                            createFunctionPosition = Offset(worldX, worldY)
+                            showCreateFunctionDialog = true
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6A1B9A)),
                         modifier = Modifier.fillMaxWidth(),
@@ -1515,7 +1553,6 @@ if __name__ == "__main__":
                     ) {
                         Text("➕ Новая функция", fontSize = 15.sp, fontWeight = FontWeight.Medium)
                     }
-                    
                     Button(
                         onClick = {
                             generatedCode = exportBlocksToPython(blocks.toMap(), arrows.toList())
@@ -1528,7 +1565,6 @@ if __name__ == "__main__":
                     ) {
                         Text("📤 Экспорт в Python", fontSize = 15.sp, fontWeight = FontWeight.Medium)
                     }
-                    
                     Button(
                         onClick = {
                             showImportDialog = true
@@ -1539,7 +1575,6 @@ if __name__ == "__main__":
                     ) {
                         Text("📥 Импорт из Python", fontSize = 15.sp, fontWeight = FontWeight.Medium)
                     }
-                    
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -1549,30 +1584,35 @@ if __name__ == "__main__":
                 }
             }
         }
-        
+
         // Диалоги
         if (showCreateFunctionDialog) {
             CreateFunctionDialog(
-                onConfirm = { name, params ->
-                    val newY = blocks.values.maxOfOrNull { it.position.y + it.size.height }?.plus(60f) ?: 100f
+                initialPosition = createFunctionPosition,
+                onConfirm = { name, params, position ->
                     val newBlock = Block(
-                        position = Offset(100f, newY),
+                        position = position,
                         blockType = BlockType.Function,
                         content = FunctionElement(name, params)
                     )
                     blocks[newBlock.id] = newBlock
                     showCreateFunctionDialog = false
+                    createFunctionPosition = null
                 },
-                onCancel = { showCreateFunctionDialog = false }
+                onCancel = {
+                    showCreateFunctionDialog = false
+                    createFunctionPosition = null
+                }
             )
         }
-        
         if (showEditDialog && blockToEdit != null) {
             CreateBlockDialog(
                 blockType = blockToEdit!!.blockType,
                 initialContent = blockToEdit!!.content,
                 onConfirm = { content ->
                     blocks[blockToEdit!!.id] = blockToEdit!!.copy(content = content)
+                    // Пересчёт позиций после редактирования
+                    recalculateBlockPositions(blocks, arrows)
                     showEditDialog = false
                     blockToEdit = null
                 },
@@ -1582,7 +1622,6 @@ if __name__ == "__main__":
                 }
             )
         }
-        
         if (showBlockTypeDialog) {
             val title = if (blockTypeDialogForBranch != null) {
                 when (blockTypeDialogForBranch!!.second) {
@@ -1593,24 +1632,22 @@ if __name__ == "__main__":
             } else {
                 "Продолжить цепочку"
             }
-            
             BlockTypeSelectionDialog(
                 title = title,
                 onSelect = { type ->
                     if (blockTypeDialogForBranch != null) {
+                        // Создание блока внутри ветки
                         val (parentIfBlockId, branchIndex) = blockTypeDialogForBranch!!
                         val parentBlock = blocks[parentIfBlockId]
                         if (parentBlock != null) {
                             val lastBlockInBranch = blocks.values
                                 .filter { it.parentIfBlockId == parentIfBlockId && it.branchIndex == branchIndex }
                                 .maxByOrNull { it.position.y } ?: parentBlock
-                            
                             val baseX = when (branchIndex) {
                                 0 -> parentBlock.position.x + BranchOffsetX
-                                -2 -> parentBlock.position.x + BranchOffsetX * 2.5f
-                                else -> parentBlock.position.x + BranchOffsetX * 1.5f
+                                -2 -> parentBlock.position.x - BranchOffsetX * 2.5f
+                                else -> parentBlock.position.x + BranchOffsetX * (1.5f + branchIndex * 2.0f)  // УВЕЛИЧЕННОЕ расстояние
                             }
-                            
                             val newBlock = Block(
                                 position = Offset(baseX, lastBlockInBranch.position.y + lastBlockInBranch.size.height + BlockSpacingY),
                                 blockType = type,
@@ -1624,19 +1661,15 @@ if __name__ == "__main__":
                                 parentIfBlockId = parentIfBlockId,
                                 branchIndex = branchIndex
                             )
-                            
                             blocks[newBlock.id] = newBlock
-                            
                             val sourceBlock = blocks.values
                                 .filter { it.parentIfBlockId == parentIfBlockId && it.branchIndex == branchIndex }
                                 .maxByOrNull { it.position.y } ?: parentBlock
-                            
                             val arrowColor = when (branchIndex) {
                                 0 -> Color(0xFF42A5F5)
                                 -2 -> Color(0xFF4CAF50)
                                 else -> Color(0xFFFFA726)
                             }
-                            
                             arrows.add(
                                 ExecutionArrow(
                                     fromBlockId = sourceBlock.id,
@@ -1644,36 +1677,107 @@ if __name__ == "__main__":
                                     style = ArrowStyle(color = arrowColor)
                                 )
                             )
+                            // Пересчёт позиций после добавления блока в ветку
+                            recalculateBlockPositions(blocks, arrows)
                         }
                     } else if (blockTypeDialogSourceId != null) {
                         val sourceBlock = blocks[blockTypeDialogSourceId!!]
                         if (sourceBlock != null) {
-                            val newY = sourceBlock.position.y + sourceBlock.size.height + BlockSpacingY
-                            val newBlock = Block(
-                                position = Offset(sourceBlock.position.x, newY),
-                                blockType = type,
-                                content = when (type) {
-                                    is BlockType.Print -> PrintElement()
-                                    is BlockType.Variable -> VariableElement()
-                                    is BlockType.If -> IfElement()
-                                    is BlockType.Return -> ReturnElement()
-                                    is BlockType.Function -> FunctionElement()
+                            if (sourceBlock.blockType is BlockType.If &&
+                                sourceBlock.branchIndex == -1 &&
+                                sourceBlock.parentIfBlockId == null) {
+                                // Продолжение после ВСЕХ веток условия
+                                val allBranchBlocks = blocks.values
+                                    .filter { it.parentIfBlockId == sourceBlock.id }
+                                    .groupBy { it.branchIndex }
+
+                                val maxY = if (allBranchBlocks.isNotEmpty()) {
+                                    allBranchBlocks.values.maxOf { branch ->
+                                        branch.maxOfOrNull { it.position.y + it.size.height } ?: 0f
+                                    }
+                                } else {
+                                    sourceBlock.position.y + sourceBlock.size.height
                                 }
-                            )
-                            
-                            blocks[sourceBlock.id] = sourceBlock.copy(nextBlockId = newBlock.id)
-                            blocks[newBlock.id] = newBlock
-                            arrows.add(
-                                ExecutionArrow(
-                                    fromBlockId = sourceBlock.id,
-                                    toBlockId = newBlock.id,
-                                    style = ArrowStyle(color = Color(0xFF42A5F5))
+
+                                val newY = maxY + BlockSpacingY
+                                val newBlock = Block(
+                                    position = Offset(sourceBlock.position.x, newY),
+                                    blockType = type,
+                                    content = when (type) {
+                                        is BlockType.Print -> PrintElement()
+                                        is BlockType.Variable -> VariableElement()
+                                        is BlockType.If -> IfElement()
+                                        is BlockType.Return -> ReturnElement()
+                                        is BlockType.Function -> FunctionElement()
+                                    }
                                 )
-                            )
-                            
-                            if (type is BlockType.If) {
-                                ifDialogSourceBlockId = newBlock.id
-                                showIfDialog = true
+                                blocks[sourceBlock.id] = sourceBlock.copy(nextBlockId = newBlock.id)
+                                blocks[newBlock.id] = newBlock
+                                arrows.add(
+                                    ExecutionArrow(
+                                        fromBlockId = sourceBlock.id,
+                                        toBlockId = newBlock.id,
+                                        style = ArrowStyle(color = Color(0xFF42A5F5))
+                                    )
+                                )
+
+                                // Добавляем стрелки от концов всех веток к новому блоку
+                                allBranchBlocks.forEach { (_, branchBlocks) ->
+                                    val lastInBranch = branchBlocks.maxByOrNull { it.position.y }
+                                    if (lastInBranch != null && lastInBranch.nextBlockId == null) {
+                                        val color = when (lastInBranch.branchIndex) {
+                                            0 -> Color(0xFF42A5F5)
+                                            -2 -> Color(0xFF4CAF50)
+                                            else -> Color(0xFFFFA726)
+                                        }
+                                        arrows.add(
+                                            ExecutionArrow(
+                                                fromBlockId = lastInBranch.id,
+                                                toBlockId = newBlock.id,
+                                                style = ArrowStyle(color = color)
+                                            )
+                                        )
+                                    }
+                                }
+
+                                // Пересчёт позиций после добавления продолжения
+                                recalculateBlockPositions(blocks, arrows)
+
+                                // Если выбран блок условия, показываем диалог настройки
+                                if (type is BlockType.If) {
+                                    ifDialogSourceBlockId = newBlock.id
+                                    showIfDialog = true
+                                }
+                            } else {
+                                // Обычный блок — продолжаем как обычно
+                                val newY = sourceBlock.position.y + sourceBlock.size.height + BlockSpacingY
+                                val newBlock = Block(
+                                    position = Offset(sourceBlock.position.x, newY),
+                                    blockType = type,
+                                    content = when (type) {
+                                        is BlockType.Print -> PrintElement()
+                                        is BlockType.Variable -> VariableElement()
+                                        is BlockType.If -> IfElement()
+                                        is BlockType.Return -> ReturnElement()
+                                        is BlockType.Function -> FunctionElement()
+                                    }
+                                )
+                                blocks[sourceBlock.id] = sourceBlock.copy(nextBlockId = newBlock.id)
+                                blocks[newBlock.id] = newBlock
+                                arrows.add(
+                                    ExecutionArrow(
+                                        fromBlockId = sourceBlock.id,
+                                        toBlockId = newBlock.id,
+                                        style = ArrowStyle(color = Color(0xFF42A5F5))
+                                    )
+                                )
+                                // Пересчёт позиций
+                                recalculateBlockPositions(blocks, arrows)
+                                // Если выбран блок условия, показываем диалог настройки
+                                if (type is BlockType.If) {
+                                    ifDialogSourceBlockId = newBlock.id
+                                    showIfDialog = true
+                                }
                             }
                         }
                     }
@@ -1688,7 +1792,6 @@ if __name__ == "__main__":
                 }
             )
         }
-        
         if (showIfDialog && ifDialogSourceBlockId != null) {
             val ifBlock = blocks[ifDialogSourceBlockId!!]
             IfDialog(
@@ -1709,20 +1812,20 @@ if __name__ == "__main__":
                         }
                         arrows.removeAll { it.fromBlockId == ifDialogSourceBlockId!! || it.toBlockId == ifDialogSourceBlockId!! }
                         blocks.remove(ifDialogSourceBlockId!!)
+                        // Пересчёт позиций
+                        recalculateBlockPositions(blocks, arrows)
                     }
                     showIfDialog = false
                     ifDialogSourceBlockId = null
                 }
             )
         }
-        
         if (showContextMenu && selectedBlockForContextMenu != null) {
             val block = selectedBlockForContextMenu!!
             val hasContinuation = block.nextBlockId != null
             val isIfHeader = block.blockType is BlockType.If && block.branchIndex == -1 && block.parentIfBlockId == null
             val hasElseBranch = isIfHeader &&
-              blocks.values.any { it.parentIfBlockId == block.id && it.branchIndex == -2 }
-            
+                    blocks.values.any { it.parentIfBlockId == block.id && it.branchIndex == -2 }
             BlockContextMenu(
                 position = contextMenuPosition,
                 block = block,
@@ -1730,29 +1833,8 @@ if __name__ == "__main__":
                 isIfHeader = isIfHeader,
                 hasElseBranch = hasElseBranch,
                 onContinue = {
-                    if (block.blockType !is BlockType.If || block.branchIndex != -1 || block.parentIfBlockId != null) {
-                        blockTypeDialogSourceId = block.id
-                        showBlockTypeDialog = true
-                    } else {
-                        val newY = block.position.y + block.size.height + BlockSpacingY
-                        val ifBlock = Block(
-                            position = Offset(block.position.x, newY),
-                            blockType = BlockType.If,
-                            content = IfElement("x > 0"),
-                            branchIndex = -1
-                        )
-                        blocks[block.id] = block.copy(nextBlockId = ifBlock.id)
-                        blocks[ifBlock.id] = ifBlock
-                        arrows.add(
-                            ExecutionArrow(
-                                fromBlockId = block.id,
-                                toBlockId = ifBlock.id,
-                                style = ArrowStyle(color = Color(0xFF42A5F5))
-                            )
-                        )
-                        ifDialogSourceBlockId = ifBlock.id
-                        showIfDialog = true
-                    }
+                    blockTypeDialogSourceId = block.id
+                    showBlockTypeDialog = true
                     showContextMenu = false
                 },
                 onEdit = {
@@ -1762,19 +1844,22 @@ if __name__ == "__main__":
                 },
                 onAddElif = if (isIfHeader) {
                     {
+                        // Находим последний elif или ветку "да"
                         val lastBranchIndex = blocks.values
                             .filter { it.parentIfBlockId == block.id && it.branchIndex >= 0 }
                             .maxOfOrNull { it.branchIndex } ?: -1
                         val newBranchIndex = lastBranchIndex + 1
-                        
+
+                        // Находим самый нижний блок в предыдущей ветке
                         val lastBlockInLastBranch = blocks.values
                             .filter { it.parentIfBlockId == block.id && it.branchIndex == lastBranchIndex }
                             .maxByOrNull { it.position.y } ?: block
-                        
+
+                        // Создаём заголовок elif — КАЖДЫЙ ПРАВЕЕ ПРЕДЫДУЩЕГО с увеличенным расстоянием
                         val elifHeaderBlock = Block(
                             position = Offset(
-                                block.position.x + BranchOffsetX * 1.5f,
-                                lastBlockInLastBranch.position.y + BlockSpacingY
+                                block.position.x + BranchOffsetX * (1.5f + newBranchIndex * 2.0f),  // УВЕЛИЧЕННОЕ расстояние
+                                lastBlockInLastBranch.position.y + lastBlockInLastBranch.size.height + BranchSpacingY
                             ),
                             blockType = BlockType.If,
                             content = IfElement("x == 0"),
@@ -1782,7 +1867,8 @@ if __name__ == "__main__":
                             branchIndex = newBranchIndex
                         )
                         blocks[elifHeaderBlock.id] = elifHeaderBlock
-                        
+
+                        // Соединяем с предыдущей веткой или напрямую с if
                         if (lastBranchIndex >= 0) {
                             val lastBlocks = blocks.values
                                 .filter { it.parentIfBlockId == block.id && it.branchIndex == lastBranchIndex }
@@ -1806,26 +1892,22 @@ if __name__ == "__main__":
                                 )
                             )
                         }
-                        
+
                         blockTypeDialogForBranch = Pair(block.id, newBranchIndex)
                         showBlockTypeDialog = true
                         showContextMenu = false
+
+                        // Пересчёт позиций
+                        recalculateBlockPositions(blocks, arrows)
                     }
                 } else null,
                 onAddElse = if (isIfHeader && !hasElseBranch) {
                     {
-                        val lastBranchIndex = blocks.values
-                            .filter { it.parentIfBlockId == block.id && it.branchIndex >= 0 }
-                            .maxOfOrNull { it.branchIndex } ?: -1
-                        
-                        val lastBlockInLastBranch = blocks.values
-                            .filter { it.parentIfBlockId == block.id && it.branchIndex == lastBranchIndex }
-                            .maxByOrNull { it.position.y } ?: block
-                        
+                        // Создаем блок else СЛЕВА и соединяем НАПРЯМУЮ с родительским if
                         val elseHeaderBlock = Block(
                             position = Offset(
-                                block.position.x + BranchOffsetX * 2.5f,
-                                lastBlockInLastBranch.position.y + BlockSpacingY
+                                block.position.x - BranchOffsetX * 2.5f,
+                                block.position.y + block.size.height + BranchSpacingY
                             ),
                             blockType = BlockType.If,
                             content = IfElement("else"),
@@ -1833,53 +1915,34 @@ if __name__ == "__main__":
                             branchIndex = -2
                         )
                         blocks[elseHeaderBlock.id] = elseHeaderBlock
-                        
-                        if (lastBranchIndex >= 0) {
-                            val lastBlocks = blocks.values
-                                .filter { it.parentIfBlockId == block.id && it.branchIndex == lastBranchIndex }
-                                .sortedBy { it.position.y }
-                            if (lastBlocks.isNotEmpty()) {
-                                val lastBlock = lastBlocks.last()
-                                arrows.add(
-                                    ExecutionArrow(
-                                        fromBlockId = lastBlock.id,
-                                        toBlockId = elseHeaderBlock.id,
-                                        style = ArrowStyle(color = Color(0xFF4CAF50))
-                                    )
-                                )
-                            }
-                        } else {
-                            arrows.add(
-                                ExecutionArrow(
-                                    fromBlockId = block.id,
-                                    toBlockId = elseHeaderBlock.id,
-                                    style = ArrowStyle(color = Color(0xFF4CAF50))
-                                )
+                        // СТРЕЛКА НАПРЯМУЮ ОТ РОДИТЕЛЬСКОГО IF
+                        arrows.add(
+                            ExecutionArrow(
+                                fromBlockId = block.id,
+                                toBlockId = elseHeaderBlock.id,
+                                style = ArrowStyle(color = Color(0xFF4CAF50))
                             )
-                        }
-                        
+                        )
                         blockTypeDialogForBranch = Pair(block.id, -2)
                         showBlockTypeDialog = true
                         showContextMenu = false
+                        // Пересчёт позиций
+                        recalculateBlockPositions(blocks, arrows)
                     }
                 } else null,
                 onDelete = {
                     fun deleteWithContinuation(blockId: String) {
                         val currentBlock = blocks[blockId] ?: return
-                        
                         if (currentBlock.nextBlockId != null &&
                             (currentBlock.blockType !is BlockType.If || currentBlock.branchIndex != -1 || currentBlock.parentIfBlockId != null)) {
                             deleteWithContinuation(currentBlock.nextBlockId!!)
                         }
-                        
                         arrows.removeAll { it.fromBlockId == blockId || it.toBlockId == blockId }
                         blocks.remove(blockId)
-                        
                         val prevBlock = blocks.values.find { it.nextBlockId == blockId }
                         if (prevBlock != null) {
                             blocks[prevBlock.id] = prevBlock.copy(nextBlockId = null)
                         }
-                        
                         if (currentBlock.blockType is BlockType.If &&
                             currentBlock.branchIndex == -1 &&
                             currentBlock.parentIfBlockId == null) {
@@ -1887,15 +1950,15 @@ if __name__ == "__main__":
                                 .filter { it.parentIfBlockId == blockId }
                                 .forEach { deleteWithContinuation(it.id) }
                         }
+                        // Пересчёт позиций после удаления
+                        recalculateBlockPositions(blocks, arrows)
                     }
-                    
                     deleteWithContinuation(block.id)
                     showContextMenu = false
                 },
                 onClose = { showContextMenu = false }
             )
         }
-        
         if (showCodePreview) {
             CodePreviewDialog(
                 code = generatedCode,
@@ -1912,7 +1975,6 @@ if __name__ == "__main__":
                 }
             )
         }
-        
         if (showImportDialog) {
             Dialog(onDismissRequest = { showImportDialog = false }) {
                 Surface(shape = RoundedCornerShape(16.dp), tonalElevation = 12.dp) {
@@ -1929,14 +1991,12 @@ if __name__ == "__main__":
                             color = Color(0xFF2E7D32),
                             modifier = Modifier.padding(bottom = 12.dp)
                         )
-                        
                         Text(
                             text = "Вставьте Python код ниже (поддерживаются: функции, условия, переменные, вывод, возврат)",
                             fontSize = 14.sp,
                             color = Color.Gray,
                             modifier = Modifier.padding(bottom = 12.dp)
                         )
-                        
                         Surface(
                             shape = RoundedCornerShape(8.dp),
                             color = Color(0xFF2D2D2D),
@@ -1963,8 +2023,12 @@ if __name__ == "__main__":
     x = 5
     if x > 0:
         print("Положительное")
+    elif x == 0:
+        print("Ноль")
+    elif x < 0:
+        print("Отрицательное")
     else:
-        print("Не положительное")
+        print("Ошибка")
     return x""",
                                         color = Color.Gray.copy(alpha = 0.7f)
                                     )
@@ -1975,9 +2039,7 @@ if __name__ == "__main__":
                                 )
                             )
                         }
-                        
                         Spacer(modifier = Modifier.height(16.dp))
-                        
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
